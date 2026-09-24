@@ -61,7 +61,7 @@ If a project's TypeScript is somewhere the launcher does not look, point `TYPESC
 ## Limitations
 
 - **No diagnostics on TypeScript 7.** The native server only reports errors when asked (pull diagnostics), and Claude Code currently only listens for pushed ones. So the automatic "errors after edit" feedback does not work on TypeScript 7 projects until either side changes. Navigation, hover and symbols are unaffected. The TypeScript 6 fallback keeps pushed diagnostics. Upstream: [microsoft/TypeScript#63921](https://github.com/microsoft/TypeScript/pull/63921), [anthropics/claude-code#40282](https://github.com/anthropics/claude-code/issues/40282).
-- **Windows is untested.** The launcher is written for it (no `.cmd` spawning, npm shim parsing, no `execve`) and CI runs the test suite on Windows, but no one has used it in a real session yet. Reports welcome.
+- **Windows has no real-session report yet.** The launcher is written for it (no `.cmd` spawning, npm shim parsing, no `execve`) and CI completes the initialize handshake with both servers on Windows, but nobody has used it from an interactive Claude Code session on Windows so far. Reports welcome.
 - **Monorepos with built package outputs.** When packages import each other through built declaration files (`dist/*.d.ts`), references from consuming packages resolve to the declaration files, not the source, so find-references on a source symbol will not list them. Any TypeScript server behaves this way. Claude Code additionally drops results in gitignored paths.
 - **Linux file watching.** The native server watches files itself only on macOS and Windows. On Linux, files changed outside Claude Code (git, formatters) are not picked up until they are opened.
 
