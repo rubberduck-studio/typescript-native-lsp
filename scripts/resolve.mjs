@@ -40,7 +40,8 @@ export class ResolveError extends Error {}
  * @param {NodeJS.Platform} [options.platform]
  * @param {string} [options.arch]
  * @param {string} [options.execPath]  node binary used to run JS entry points
- * @returns {{ command: string, args: string[], shell: boolean, reason: string, typescript?: { dir: string, version: string } }}
+ * @returns {{ command: string, args: string[], shell: boolean, native: boolean, reason: string, typescript?: { dir: string, version: string } }}
+ *   `native` is true when the command is TypeScript's own language server (7 or newer).
  */
 export function resolveServer({ projectDir, env = process.env, platform = process.platform, arch = process.arch, execPath = process.execPath }) {
 	const context = { env, platform, arch, execPath };
@@ -201,11 +202,11 @@ function packageDirOf(filePath) {
 function nativeCommand(pkgDir, { platform, arch, execPath }) {
 	const executable = nativeExecutable(pkgDir, platform, arch);
 	if (null !== executable) {
-		return { command: executable, args: LSP_ARGS, shell: false };
+		return { command: executable, args: LSP_ARGS, shell: false, native: true };
 	}
 	const wrapper = path.join(pkgDir, 'lib', 'tsc.js');
 	if (fs.existsSync(wrapper)) {
-		return { command: execPath, args: [wrapper, ...LSP_ARGS], shell: false };
+		return { command: execPath, args: [wrapper, ...LSP_ARGS], shell: false, native: true };
 	}
 	throw new ResolveError(`TypeScript at ${pkgDir} has neither a platform binary for ${platform}-${arch} nor lib/tsc.js`);
 }
@@ -237,7 +238,7 @@ function findNativeOnPath(context) {
 			continue;
 		}
 		if (majorOf(version) >= 7) {
-			return { command: found.command, args: LSP_ARGS, shell: found.shell, reason: `${name} ${version} on PATH at ${found.command}` };
+			return { command: found.command, args: LSP_ARGS, shell: found.shell, native: true, reason: `${name} ${version} on PATH at ${found.command}` };
 		}
 	}
 	return null;
@@ -248,17 +249,17 @@ function findNativeOnPath(context) {
 function findLanguageServer(projectDir, context) {
 	const local = findUp(path.resolve(projectDir), dir => existingFile(path.join(dir, 'node_modules', LANGUAGE_SERVER_ENTRY)));
 	if (null !== local) {
-		return { command: context.execPath, args: [local, '--stdio'], shell: false, reason: `project-local typescript-language-server at ${local}` };
+		return { command: context.execPath, args: [local, '--stdio'], shell: false, native: false, reason: `project-local typescript-language-server at ${local}` };
 	}
 	for (const root of globalNodeModules(context)) {
 		const entry = existingFile(path.join(root, LANGUAGE_SERVER_ENTRY));
 		if (null !== entry) {
-			return { command: context.execPath, args: [entry, '--stdio'], shell: false, reason: `global typescript-language-server at ${entry}` };
+			return { command: context.execPath, args: [entry, '--stdio'], shell: false, native: false, reason: `global typescript-language-server at ${entry}` };
 		}
 	}
 	const onPath = whichOnPath('typescript-language-server', context);
 	if (null !== onPath) {
-		return { command: onPath.command, args: ['--stdio'], shell: onPath.shell, reason: `typescript-language-server on PATH at ${onPath.command}` };
+		return { command: onPath.command, args: ['--stdio'], shell: onPath.shell, native: false, reason: `typescript-language-server on PATH at ${onPath.command}` };
 	}
 	return null;
 }

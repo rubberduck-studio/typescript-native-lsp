@@ -1,0 +1,60 @@
+{
+  "//": "initialize parameters Claude Code sends to a plugin LSP server, captured from Claude Code 2.1.281 on 2026-09-24 with a recording server; see CONTRIBUTING.md to refresh",
+  "clientInfo": {
+    "name": "Claude Code",
+    "version": "2.1.281"
+  },
+  "initializationOptions": {},
+  "capabilities": {
+    "workspace": {
+      "configuration": false,
+      "workspaceFolders": false
+    },
+    "textDocument": {
+      "synchronization": {
+        "dynamicRegistration": false,
+        "willSave": false,
+        "willSaveWaitUntil": false,
+        "didSave": true
+      },
+      "publishDiagnostics": {
+        "relatedInformation": true,
+        "tagSupport": {
+          "valueSet": [
+            1,
+            2
+          ]
+        },
+        "versionSupport": false,
+        "codeDescriptionSupport": true,
+        "dataSupport": false
+      },
+      "hover": {
+        "dynamicRegistration": false,
+        "contentFormat": [
+          "markdown",
+          "plaintext"
+        ]
+      },
+      "definition": {
+        "dynamicRegistration": false,
+        "linkSupport": true
+      },
+      "references": {
+        "dynamicRegistration": false
+      },
+      "documentSymbol": {
+        "dynamicRegistration": false,
+        "hierarchicalDocumentSymbolSupport": true
+      },
+      "callHierarchy": {
+        "dynamicRegistration": false
+      }
+    },
+    "general": {
+      "positionEncodings": [
+        "utf-16"
+      ]
+    }
+  }
+}

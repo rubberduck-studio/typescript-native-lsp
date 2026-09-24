@@ -2,8 +2,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawn, spawnSync } from 'node:child_process';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { startSession } from './helpers/lsp-session.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const launcher = path.join(here, '..', 'scripts', 'launch.mjs');
@@ -21,54 +22,14 @@ function envFor(projectDir) {
 	return { ...process.env, CLAUDE_PROJECT_DIR: projectDir, TYPESCRIPT_NATIVE_LSP_TSDK: '' };
 }
 
-/** Starts the launcher for a project, performs the LSP initialize handshake and returns the server's response. */
-function initialize(projectDir) {
-	return new Promise((resolve, reject) => {
-		const child = spawn(process.execPath, [launcher], { cwd: projectDir, env: envFor(projectDir), stdio: ['pipe', 'pipe', 'pipe'] });
-		let buffer = Buffer.alloc(0);
-		let stderr = '';
-		const timer = setTimeout(() => {
-			child.kill();
-			reject(new Error(`no initialize response within 30s\nstderr:\n${stderr}\nstdout:\n${buffer.toString('utf8')}`));
-		}, 30000);
-		child.stderr.on('data', chunk => (stderr += chunk));
-		child.stdout.on('data', chunk => {
-			buffer = Buffer.concat([buffer, chunk]);
-			for (let message = readMessage(); null !== message; message = readMessage()) {
-				if (1 !== message.id) {
-					continue;
-				}
-				clearTimeout(timer);
-				child.kill();
-				resolve({ message, stderr });
-				return;
-			}
-		});
-		child.on('error', reject);
-		/** Consumes one complete LSP message from the buffer, or returns null when none is complete yet. */
-		function readMessage() {
-			const headerEnd = buffer.indexOf('\r\n\r\n');
-			if (-1 === headerEnd) {
-				return null;
-			}
-			const header = buffer.subarray(0, headerEnd).toString('ascii');
-			const length = Number.parseInt(/Content-Length: (\d+)/.exec(header)[1], 10);
-			const bodyStart = headerEnd + 4;
-			if (buffer.length < bodyStart + length) {
-				return null;
-			}
-			const message = JSON.parse(buffer.subarray(bodyStart, bodyStart + length).toString('utf8'));
-			buffer = buffer.subarray(bodyStart + length);
-			return message;
-		}
-		const request = JSON.stringify({
-			jsonrpc: '2.0',
-			id: 1,
-			method: 'initialize',
-			params: { processId: process.pid, rootUri: pathToFileURL(projectDir).href, capabilities: {} },
-		});
-		child.stdin.write(`Content-Length: ${Buffer.byteLength(request)}\r\n\r\n${request}`);
-	});
+async function initialize(projectDir) {
+	const session = startSession(projectDir);
+	try {
+		const message = await session.initialize();
+		return { message, stderr: session.stderr };
+	} finally {
+		session.close();
+	}
 }
 
 test('--resolve prints the plan as JSON', { skip: false === installed('ts7') && 'run npm run fixtures' }, () => {
@@ -77,6 +38,7 @@ test('--resolve prints the plan as JSON', { skip: false === installed('ts7') && 
 	const plan = JSON.parse(result.stdout);
 	assert.equal(plan.projectDir, fixture('ts7'));
 	assert.deepEqual(plan.args, ['--lsp', '--stdio']);
+	assert.equal(plan.native, true);
 });
 
 test('unresolvable project exits 1 with a message on stderr and nothing on stdout', () => {

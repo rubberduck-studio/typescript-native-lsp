@@ -8,6 +8,10 @@
  * Windows, or where execve is unavailable, it stays as a thin parent that
  * forwards signals and exits with the server's status.
  *
+ * For the native server the launcher instead stays in the middle as a
+ * diagnostics bridge (see diagnostics-bridge.mjs), unless
+ * TYPESCRIPT_NATIVE_LSP_DIAGNOSTICS=0 opts out.
+ *
  * stdout carries the LSP protocol, so every message from the launcher goes to
  * stderr. `--resolve` prints the resolved command as JSON and exits, for
  * troubleshooting from a shell.
@@ -17,6 +21,7 @@ import { resolveServer, ResolveError } from './resolve.mjs';
 
 const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
 const resolveOnly = process.argv.includes('--resolve');
+const bridgeDiagnostics = '0' !== process.env.TYPESCRIPT_NATIVE_LSP_DIAGNOSTICS;
 
 let plan;
 try {
@@ -30,8 +35,10 @@ try {
 	process.exit(1);
 }
 
+const useBridge = plan.native && bridgeDiagnostics;
+
 if (resolveOnly) {
-	process.stdout.write(JSON.stringify({ projectDir, ...plan }, null, 2) + '\n');
+	process.stdout.write(JSON.stringify({ projectDir, ...plan, diagnosticsBridge: useBridge }, null, 2) + '\n');
 	process.exit(0);
 }
 
@@ -39,30 +46,39 @@ log(`project dir ${projectDir}${projectDir === process.cwd() ? '' : ` (cwd ${pro
 log(plan.reason);
 log(`launching ${plan.command} ${plan.args.join(' ')}`);
 
-if ('function' === typeof process.execve && 'win32' !== process.platform && false === plan.shell) {
-	try {
-		process.execve(plan.command, [plan.command, ...plan.args], process.env);
-	} catch (error) {
-		log(`execve failed (${error.message}); spawning instead`);
-	}
+if (useBridge) {
+	const { runBridge } = await import('./diagnostics-bridge.mjs');
+	runBridge({ command: plan.command, args: plan.args, shell: plan.shell, log, debug: '1' === process.env.TYPESCRIPT_NATIVE_LSP_DEBUG });
+} else {
+	launchDirectly(plan);
 }
 
-const child = spawn(plan.command, plan.args, { stdio: 'inherit', shell: plan.shell, windowsHide: true });
-for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
-	process.on(signal, () => child.kill(signal));
-}
-child.on('error', error => {
-	log(`failed to start ${plan.command}: ${error.message}`);
-	process.exit(1);
-});
-child.on('exit', (code, signal) => {
-	if (null !== signal) {
-		log(`server exited on ${signal}`);
-		process.kill(process.pid, signal);
-		return;
+function launchDirectly({ command, args, shell }) {
+	if ('function' === typeof process.execve && 'win32' !== process.platform && false === shell) {
+		try {
+			process.execve(command, [command, ...args], process.env);
+		} catch (error) {
+			log(`execve failed (${error.message}); spawning instead`);
+		}
 	}
-	process.exit(code ?? 1);
-});
+
+	const child = spawn(command, args, { stdio: 'inherit', shell, windowsHide: true });
+	for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
+		process.on(signal, () => child.kill(signal));
+	}
+	child.on('error', error => {
+		log(`failed to start ${command}: ${error.message}`);
+		process.exit(1);
+	});
+	child.on('exit', (code, signal) => {
+		if (null !== signal) {
+			log(`server exited on ${signal}`);
+			process.kill(process.pid, signal);
+			return;
+		}
+		process.exit(code ?? 1);
+	});
+}
 
 function log(message) {
 	process.stderr.write(`[typescript-native-lsp] ${message}\n`);

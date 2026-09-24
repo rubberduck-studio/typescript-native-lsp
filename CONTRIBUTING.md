@@ -27,7 +27,9 @@ CI runs the same tests on Linux, macOS and Windows with Node 22 and 24, and vali
 ## Where things live
 
 - `scripts/resolve.mjs` decides which server to run; `scripts/launch.mjs` starts it.
+- `scripts/diagnostics-bridge.mjs` turns the native server's pull diagnostics into pushes. It is an appendix: when TypeScript or Claude Code closes the gap, delete the file, the `useBridge` branch in `launch.mjs`, `test/diagnostics-bridge.test.mjs` and the Diagnostics section of the README. `test/diagnostics.test.mjs` is written against the behaviour, not the bridge, and must keep passing afterwards.
 - `.lsp.json` is the server configuration Claude Code reads.
+- `test/fixtures/claude-code-client.json` is what Claude Code sends in `initialize`, so session tests behave like the real client. To refresh it after a Claude Code release, point a throwaway plugin's `.lsp.json` at a script that appends every incoming message to a file and answers `initialize` with empty capabilities, run `claude -p` with `--plugin-dir` on any TypeScript file, and copy the captured `clientInfo`, `initializationOptions` and `capabilities`.
 - The README's "How it works" section is the specification for the resolution order. Change both together.
 
 ## Pull requests

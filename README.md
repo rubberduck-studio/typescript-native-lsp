@@ -1,6 +1,12 @@
 # typescript-native-lsp
 
-TypeScript/JavaScript language server for Claude Code that runs TypeScript 7's native LSP (`tsc --lsp`) and falls back to typescript-language-server for TypeScript 6 and older, providing code intelligence features like go-to-definition, find references and type information for a symbol.
+TypeScript/JavaScript language server for Claude Code that runs TypeScript 7's native LSP (`tsc --lsp`) and falls back to typescript-language-server for TypeScript 6 and older, providing code intelligence features like go-to-definition, find references, type information, and type errors reported after edits.
+
+## What you get
+
+- **Type errors after edits, without running a typecheck.** When Claude edits a file, that file's errors reach the conversation on its next tool call, so mistakes are caught while Claude is still on the file rather than after a full `tsc` run. Only files Claude edits are checked, and Claude Code attaches the errors one tool call late; see Diagnostics and Limitations.
+- **Compiler-backed navigation instead of grep.** Go to definition, find references, implementations, call hierarchy, document and workspace symbols, and the resolved type and documentation of any symbol.
+- **TypeScript 7's speed.** The native server starts and loads large projects far faster than `tsserver`, and it is the same compiler that typechecks your build.
 
 ## Why this plugin exists
 
@@ -68,6 +74,12 @@ Inside Claude Code:
 - `claude --debug` logs `Loaded 1 LSP server(s) from plugin: typescript-native-lsp` and `Total LSP servers loaded: N` at startup, then the launcher's `[typescript-native-lsp]` lines when the server starts, including the resolved project directory, TypeScript and command.
 - `/reload-plugins` picks up plugin changes without restarting the session.
 
+## Diagnostics
+
+Claude Code attaches a file's type errors to the conversation after an edit, and it learns about them only through pushed `textDocument/publishDiagnostics` notifications. TypeScript 7's native server never pushes per-file diagnostics; it answers `textDocument/diagnostic` requests instead. To close that gap the launcher stays in front of the native server as a small bridge: it forwards all traffic unchanged and, after each `didOpen`, `didChange` or `didSave`, requests the file's diagnostics from the server and publishes the result to Claude Code. The effect is the same as with typescript-language-server on TypeScript 6, which pushes on its own and needs no bridge.
+
+The bridge is an interim measure. It switches itself off when the client advertises pull-diagnostics support, and it will be removed once TypeScript pushes for such clients ([microsoft/TypeScript#63921](https://github.com/microsoft/TypeScript/pull/63921)) or Claude Code pulls ([anthropics/claude-code#40282](https://github.com/anthropics/claude-code/issues/40282)). Set `TYPESCRIPT_NATIVE_LSP_DIAGNOSTICS=0` to run the native server directly without it; `TYPESCRIPT_NATIVE_LSP_DEBUG=1` logs each request and publish to stderr.
+
 ## Git worktrees
 
 Claude Code roots the server at the directory the session started in and keeps it there when Claude enters a git worktree later: `${CLAUDE_PROJECT_DIR}` and the server's working directory stay at the original checkout, so the launcher resolves TypeScript from that checkout. Requests on worktree files are still answered correctly, because the native server resolves each opened file's own `tsconfig.json`: a type lookup finds symbols that exist only in the worktree, and references for a worktree file return worktree paths only. This holds whether the server started before or after Claude entered the worktree. A session launched inside a worktree resolves TypeScript from the worktree itself.
@@ -76,7 +88,7 @@ The one consequence: the TypeScript that runs the server is the one installed wh
 
 ## Limitations
 
-- **No diagnostics on TypeScript 7.** The native server only reports errors when asked (pull diagnostics), and Claude Code currently only listens for pushed ones. So the automatic "errors after edit" feedback does not work on TypeScript 7 projects until either side changes. Navigation, type information and symbol listing are unaffected. The TypeScript 6 fallback keeps pushed diagnostics. Upstream: [microsoft/TypeScript#63921](https://github.com/microsoft/TypeScript/pull/63921), [anthropics/claude-code#40282](https://github.com/anthropics/claude-code/issues/40282).
+- **Diagnostics arrive one tool call late.** Claude Code does not wait for a language server's diagnostics after an edit; it attaches whatever arrived by the next tool call, and drops diagnostics for a file that the very next call edits again. This is client behaviour, identical for every LSP plugin ([anthropics/claude-code#93321](https://github.com/anthropics/claude-code/issues/93321)).
 - **Windows has no real-session report yet.** The launcher is written for it (no `.cmd` spawning, npm shim parsing, no `execve`) and CI completes the initialize handshake with both servers on Windows, but nobody has used it from an interactive Claude Code session on Windows so far. Reports welcome.
 - **Monorepos with built package outputs.** When packages import each other through built declaration files (`dist/*.d.ts`), references from consuming packages resolve to the declaration files, not the source, so find-references on a source symbol will not list them. Any TypeScript server behaves this way. Claude Code additionally drops results in gitignored paths.
 - **Linux file watching.** The native server watches files itself only on macOS and Windows. On Linux, files changed outside Claude Code (git, formatters) are not picked up until they are opened.
