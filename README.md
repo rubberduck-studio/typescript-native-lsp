@@ -58,6 +58,12 @@ node ~/.claude/plugins/marketplaces/typescript-native-lsp/scripts/launch.mjs --r
 
 If a project's TypeScript is somewhere the launcher does not look, point `TYPESCRIPT_NATIVE_LSP_TSDK` at the package directory, for example `/path/to/node_modules/typescript`, in the shell that starts Claude Code.
 
+## Git worktrees
+
+Claude Code roots the server at the directory the session started in and keeps it there when Claude enters a git worktree later: `${CLAUDE_PROJECT_DIR}` and the server's working directory stay at the original checkout, so the launcher resolves TypeScript from that checkout. Requests on worktree files are still answered correctly, because the native server resolves each opened file's own `tsconfig.json`: hover finds symbols that exist only in the worktree, and references for a worktree file return worktree paths only. This holds whether the server started before or after Claude entered the worktree. A session launched inside a worktree resolves TypeScript from the worktree itself.
+
+The one consequence: the TypeScript that runs the server is the one installed where the session started. A worktree branch that changes the TypeScript version is served by the start directory's version. Launch the session inside the worktree or set `TYPESCRIPT_NATIVE_LSP_TSDK` if that matters.
+
 ## Limitations
 
 - **No diagnostics on TypeScript 7.** The native server only reports errors when asked (pull diagnostics), and Claude Code currently only listens for pushed ones. So the automatic "errors after edit" feedback does not work on TypeScript 7 projects until either side changes. Navigation, hover and symbols are unaffected. The TypeScript 6 fallback keeps pushed diagnostics. Upstream: [microsoft/TypeScript#63921](https://github.com/microsoft/TypeScript/pull/63921), [anthropics/claude-code#40282](https://github.com/anthropics/claude-code/issues/40282).
