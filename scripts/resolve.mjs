@@ -9,11 +9,12 @@
  * Resolution order:
  *   1. TYPESCRIPT_NATIVE_LSP_TSDK: an explicit path to a `typescript` package
  *      directory (TypeScript 7 or newer).
- *   2. The TypeScript the project declares, walking up from the project directory
- *      to the nearest lockfile or git root: `node_modules/typescript`, plus every
- *      dependency declared as an alias of typescript (`"name": "npm:typescript@…"`).
- *      The highest version wins, so an aliased TypeScript 7 next to a TypeScript 6
- *      API shim is picked up.
+ *   2. Every typescript package installed under `node_modules`, walking up from the
+ *      project directory to the nearest lockfile or git root. A package counts by
+ *      the name in its own package.json, not by its directory, so an alias such as
+ *      `"@typescript/native": "npm:typescript@7"` is found wherever the package
+ *      manager hoisted it. The highest version wins, so an aliased TypeScript 7 next
+ *      to a TypeScript 6 API shim is picked up.
  *   3. Workspace packages under `packages/*` and `apps/*` of that root, same rule.
  *   4. A `typescript` package of version 7 or newer under the global npm root.
  *   5. On POSIX, `tsc` or `tsgo` on PATH when they report version 7 or newer.
@@ -34,7 +35,7 @@ import { spawnSync } from 'node:child_process';
 const LSP_ARGS = ['--lsp', '--stdio'];
 const ROOT_MARKERS = ['package-lock.json', 'npm-shrinkwrap.json', 'yarn.lock', 'pnpm-lock.yaml', 'bun.lock', 'bun.lockb', '.git'];
 const WORKSPACE_DIRS = ['packages', 'apps'];
-const DEPENDENCY_FIELDS = ['dependencies', 'devDependencies', 'optionalDependencies'];
+const SKIPPED_ENTRIES = new Set(['.bin', '.cache', '.package-lock.json', '.pnpm', '.modules.yaml', '.yarn-integrity']);
 const LANGUAGE_SERVER_ENTRY = path.join('typescript-language-server', 'lib', 'cli.mjs');
 
 export class ResolveError extends Error {}
@@ -116,40 +117,51 @@ function findProjectTypescript(start, rootDir) {
 	return findWorkspaceTypescript(rootDir);
 }
 
-/** Every TypeScript package a directory declares, highest version first. */
+/**
+ * The highest-versioned typescript package installed directly under a directory's
+ * node_modules, found by the name in each package's own package.json so that
+ * aliased installs count whatever directory they live in.
+ */
 function bestTypescriptIn(dir) {
 	const nodeModules = path.join(dir, 'node_modules');
-	const candidates = [];
-	const direct = readPackage(path.join(nodeModules, 'typescript'));
-	if (null !== direct && 'typescript' === direct.name) {
-		candidates.push({ dir: path.join(nodeModules, 'typescript'), pkg: direct, via: 'node_modules/typescript' });
-	}
-	for (const alias of typescriptAliasesDeclaredIn(dir)) {
-		const pkg = readPackage(path.join(nodeModules, alias));
-		if (null !== pkg && 'typescript' === pkg.name) {
-			candidates.push({ dir: path.join(nodeModules, alias), pkg, via: `the "${alias}" alias of typescript` });
+	let best = null;
+	for (const entry of listEntries(nodeModules)) {
+		const pkgDir = path.join(nodeModules, entry);
+		const pkg = readPackage(pkgDir);
+		if (null === pkg || 'typescript' !== pkg.name) {
+			continue;
+		}
+		if (null === best || compareVersions(pkg.version, best.pkg.version) > 0) {
+			best = { dir: pkgDir, pkg, via: 'typescript' === entry ? 'node_modules/typescript' : `node_modules/${entry}, an alias of typescript` };
 		}
 	}
-	candidates.sort((a, b) => compareVersions(b.pkg.version, a.pkg.version));
-	return candidates[0] ?? null;
+	return best;
 }
 
-function typescriptAliasesDeclaredIn(dir) {
-	let manifest;
+/** Package directory names under a node_modules, with scoped packages as `@scope/name`. */
+function listEntries(nodeModules) {
+	const entries = [];
+	for (const name of listNames(nodeModules)) {
+		if (SKIPPED_ENTRIES.has(name)) {
+			continue;
+		}
+		if (name.startsWith('@')) {
+			for (const scoped of listNames(path.join(nodeModules, name))) {
+				entries.push(`${name}/${scoped}`);
+			}
+			continue;
+		}
+		entries.push(name);
+	}
+	return entries;
+}
+
+function listNames(dir) {
 	try {
-		manifest = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8'));
+		return fs.readdirSync(dir);
 	} catch {
 		return [];
 	}
-	const aliases = [];
-	for (const field of DEPENDENCY_FIELDS) {
-		for (const [name, spec] of Object.entries(manifest[field] ?? {})) {
-			if ('typescript' !== name && 'string' === typeof spec && /^npm:typescript@/.test(spec)) {
-				aliases.push(name);
-			}
-		}
-	}
-	return aliases;
 }
 
 function findWorkspaceTypescript(rootDir) {

@@ -97,15 +97,24 @@ test('nested directory walks up to the project TypeScript', { skip: false === in
 	assert.equal(plan.typescript.version, '7.0.2');
 });
 
-test('an alias declared in package.json is found without any bin shim', () => {
+test('an aliased typescript is found by its package name, wherever it was hoisted', () => {
 	const root = tempDir();
-	writeJson(path.join(root, 'package.json'), { name: 'p', devDependencies: { '@scope/ts-alias': 'npm:typescript@7.1.0', typescript: 'npm:@typescript/typescript6@6.0.2' } });
+	fs.writeFileSync(path.join(root, 'package-lock.json'), '');
+	writeJson(path.join(root, 'package.json'), { name: 'monorepo', workspaces: ['packages/*'] });
+	writeJson(path.join(root, 'packages', 'lib', 'package.json'), { name: 'lib', devDependencies: { '@scope/ts-alias': 'npm:typescript@7.1.0', typescript: 'npm:@typescript/typescript6@6.0.2' } });
 	writeFakeTypescript(path.join(root, 'node_modules', '@scope', 'ts-alias'), '7.1.0');
-	writeFakeTypescript(path.join(root, 'node_modules', 'typescript'), '6.0.2');
-	const plan = resolveServer({ projectDir: root, ...hermetic });
+	writeJson(path.join(root, 'node_modules', 'typescript', 'package.json'), { name: '@typescript/typescript6', version: '6.0.2' });
+	const plan = resolveServer({ projectDir: path.join(root, 'packages', 'lib'), ...hermetic });
 	assert.equal(plan.typescript.version, '7.1.0');
-	assert.equal(plan.command, process.execPath);
 	assert.equal(plan.args[0], path.join(root, 'node_modules', '@scope', 'ts-alias', 'lib', 'tsc.js'));
+	assert.match(plan.reason, /node_modules\/@scope\/ts-alias, an alias of typescript/);
+});
+
+test('a package named typescript but installed under another name still counts', () => {
+	const root = tempDir();
+	writeFakeTypescript(path.join(root, 'node_modules', 'ts-next'), '7.2.0');
+	const plan = resolveServer({ projectDir: root, ...hermetic });
+	assert.equal(plan.typescript.version, '7.2.0');
 });
 
 test('pnpm-style symlinked typescript resolves the platform binary next to the real package', { skip: 'win32' === platform && 'symlink layout' }, () => {

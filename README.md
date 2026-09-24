@@ -45,7 +45,7 @@ The last line matters. When two enabled plugins claim the same file extension, C
 On every start the launcher decides which server to run for the session's project directory, in this order:
 
 1. `TYPESCRIPT_NATIVE_LSP_TSDK`, if set, as the path of a `typescript` package directory of version 7 or newer.
-2. The TypeScript the project declares, walking up from the project directory to the nearest lockfile or git root: `node_modules/typescript`, plus any dependency declared as an alias of typescript (`"some-name": "npm:typescript@7"`). The highest version wins, so an aliased TypeScript 7 next to a TypeScript 6 API shim is picked up. This reads package.json, not bin shims, so it works the same under npm, pnpm, yarn and bun.
+2. Every typescript package installed under `node_modules`, walking up from the project directory to the nearest lockfile or git root. A package counts by the name in its own package.json, not by its directory, so an alias such as `"@typescript/native": "npm:typescript@7"` is found wherever the package manager hoisted it. The highest version wins, so an aliased TypeScript 7 next to a TypeScript 6 API shim is picked up. This works the same under npm, pnpm, yarn and bun.
 3. Workspace packages under `packages/*` and `apps/*` of that root, same rule.
 4. A `typescript` package of version 7 or newer under the global npm root (`TYPESCRIPT_NATIVE_LSP_GLOBAL_ROOTS` overrides where to look, as a `PATH`-style list).
 5. On macOS and Linux, `tsc` or `tsgo` on `PATH`, if `--version` reports 7 or newer.
