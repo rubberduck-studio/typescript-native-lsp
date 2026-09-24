@@ -51,11 +51,14 @@ The launcher makes no network requests and sends no telemetry. The only process 
 
 ### Troubleshooting
 
-Run the launcher's resolve mode from the project directory to see what it would start and why:
+Run the launcher's resolve mode from the project directory to see what it would start and why. The installed copy lives in Claude Code's plugin cache; `claude plugin list --json` prints its location as `installPath`:
 
 ```bash
-node ~/.claude/plugins/marketplaces/typescript-native-lsp/scripts/launch.mjs --resolve
+claude plugin list --json   # note the installPath of typescript-native-lsp
+node <installPath>/scripts/launch.mjs --resolve
 ```
+
+A clone of this repository works the same way: `node scripts/launch.mjs --resolve` from inside the project directory.
 
 If a project's TypeScript is somewhere the launcher does not look, point `TYPESCRIPT_NATIVE_LSP_TSDK` at the package directory, for example `/path/to/node_modules/typescript`, in the shell that starts Claude Code.
 
