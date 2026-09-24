@@ -28,6 +28,7 @@ export function startSession(projectDir, { env = {}, capabilities = claudeCodeCl
 	let nextId = 0;
 	const pending = new Map();
 	const notifications = [];
+	const unexpectedResponses = [];
 	const waiters = [];
 
 	child.stderr.on('data', chunk => (stderr += chunk));
@@ -79,8 +80,12 @@ export function startSession(projectDir, { env = {}, capabilities = claudeCodeCl
 			return;
 		}
 		const resolve = pending.get(message.id);
+		if (undefined === resolve) {
+			unexpectedResponses.push(message);
+			return;
+		}
 		pending.delete(message.id);
-		resolve?.(message);
+		resolve(message);
 	}
 
 	function write(message) {
@@ -91,6 +96,8 @@ export function startSession(projectDir, { env = {}, capabilities = claudeCodeCl
 	const session = {
 		child,
 		notifications,
+		/** Responses whose id this session never sent; a bridge must never leak its own. */
+		unexpectedResponses,
 		get stderr() {
 			return stderr;
 		},

@@ -6,9 +6,11 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { startSession } from './helpers/lsp-session.mjs';
 
+
 const here = path.dirname(fileURLToPath(import.meta.url));
 const launcher = path.join(here, '..', 'scripts', 'launch.mjs');
 const fixtures = path.join(here, 'fixtures');
+const lspConfig = JSON.parse(fs.readFileSync(path.join(here, '..', '.lsp.json'), 'utf8')).typescript;
 
 function fixture(name) {
 	return path.join(fixtures, name);
@@ -75,3 +77,33 @@ test('TypeScript 6 project completes the initialize handshake with typescript-la
 	assert.equal(message.result.capabilities.hoverProvider, true);
 	assert.match(stderr, /TypeScript 6\.0\.3 .* typescript-language-server/);
 });
+
+test('.lsp.json points Claude Code at the launcher the tests exercise', () => {
+	assert.equal(lspConfig.command, 'node');
+	const script = lspConfig.args[0].replace('${CLAUDE_PLUGIN_ROOT}', path.join(here, '..'));
+	assert.equal(path.resolve(script), launcher);
+	const readme = fs.readFileSync(path.join(here, '..', 'README.md'), 'utf8');
+	const documented = /## Supported Extensions\n(.*)\n/.exec(readme)[1].match(/`(\.[a-z]+)`/g).map(s => s.replaceAll('`', ''));
+	assert.deepEqual(Object.keys(lspConfig.extensionToLanguage).sort(), documented.sort());
+});
+
+for (const name of ['ts7', 'ts6']) {
+	/** The status is the server's own: typescript-language-server exits 0, TypeScript 7.0.2 exits 1 ("context canceled"). What matters is that the launcher ends with it. */
+	test(`${name}: shutdown and exit end the launcher with the server's status`, { skip: false === installed(name) && 'run npm run fixtures' }, async () => {
+		const session = startSession(fixture(name));
+		await session.initialize();
+		await session.request('shutdown');
+		session.notify('exit');
+		const { code, signal } = await session.exited();
+		assert.equal(signal, null);
+		assert.ok(0 === code || 1 === code, `code ${code}`);
+	});
+
+	test(`${name}: a termination signal ends the launcher and its server`, { skip: (false === installed(name) && 'run npm run fixtures') || ('win32' === process.platform && 'POSIX signals') }, async () => {
+		const session = startSession(fixture(name));
+		await session.initialize();
+		session.child.kill('SIGTERM');
+		const { code, signal } = await session.exited();
+		assert.ok('SIGTERM' === signal || 143 === code || 1 === code, `code ${code} signal ${signal}`);
+	});
+}

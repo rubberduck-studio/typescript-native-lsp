@@ -3,22 +3,24 @@
  * Entry point spawned by Claude Code. Resolves the right language server for
  * the project and hands the stdio pipes over to it.
  *
- * On POSIX the launcher replaces itself with the server (execve), so Claude Code
- * talks to the server directly and the process it tracks is the real one. On
- * Windows, or where execve is unavailable, it stays as a thin parent that
- * forwards signals and exits with the server's status.
- *
- * For the native server the launcher instead stays in the middle as a
- * diagnostics bridge (see diagnostics-bridge.mjs), unless
- * TYPESCRIPT_NATIVE_LSP_DIAGNOSTICS=0 opts out.
+ * For the native server the launcher stays in the middle as a diagnostics bridge
+ * (see diagnostics-bridge.mjs), unless TYPESCRIPT_NATIVE_LSP_DIAGNOSTICS=0 opts
+ * out. Otherwise, on POSIX it replaces itself with the server (execve), so Claude
+ * Code talks to the server directly; on Windows, or where execve is unavailable,
+ * it stays as a thin parent that forwards signals and exits with the server's
+ * status.
  *
  * stdout carries the LSP protocol, so every message from the launcher goes to
  * stderr. `--resolve` prints the resolved command as JSON and exits, for
  * troubleshooting from a shell.
  */
 import path from 'node:path';
+import os from 'node:os';
 import { spawn } from 'node:child_process';
 import { resolveServer, ResolveError } from './resolve.mjs';
+
+const SIGNALS = ['SIGINT', 'SIGTERM', 'SIGHUP'];
+const KILL_GRACE_MS = 2000;
 
 const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
 const resolveOnly = process.argv.includes('--resolve');
@@ -51,13 +53,13 @@ log(`launching ${plan.command} ${plan.args.join(' ')}`);
 
 if (useBridge) {
 	const { runBridge } = await import('./diagnostics-bridge.mjs');
-	runBridge({ command: plan.command, args: plan.args, shell: plan.shell, log, debug: '1' === process.env.TYPESCRIPT_NATIVE_LSP_DEBUG });
+	runBridge({ command: plan.command, args: plan.args, log, debug: '1' === process.env.TYPESCRIPT_NATIVE_LSP_DEBUG });
 } else {
 	launchDirectly(plan);
 }
 
-function launchDirectly({ command, args, shell }) {
-	if ('function' === typeof process.execve && 'win32' !== process.platform && false === shell) {
+function launchDirectly({ command, args }) {
+	if ('function' === typeof process.execve && 'win32' !== process.platform) {
 		try {
 			process.execve(command, [command, ...args], process.env);
 		} catch (error) {
@@ -65,21 +67,22 @@ function launchDirectly({ command, args, shell }) {
 		}
 	}
 
-	const child = spawn(command, args, { stdio: 'inherit', shell, windowsHide: true });
-	for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
-		process.on(signal, () => child.kill(signal));
+	const child = spawn(command, args, { stdio: 'inherit', windowsHide: true });
+	for (const signal of SIGNALS) {
+		process.on(signal, () => {
+			child.kill(signal);
+			setTimeout(() => child.kill('SIGKILL'), KILL_GRACE_MS).unref();
+		});
 	}
 	child.on('error', error => {
 		log(`failed to start ${command}: ${error.message}`);
-		process.exit(1);
+		process.exitCode = 1;
 	});
-	child.on('exit', (code, signal) => {
+	child.on('close', (code, signal) => {
 		if (null !== signal) {
 			log(`server exited on ${signal}`);
-			process.kill(process.pid, signal);
-			return;
 		}
-		process.exit(code ?? 1);
+		process.exitCode = null !== signal ? 128 + (os.constants.signals[signal] ?? 0) : code ?? 1;
 	});
 }
 
