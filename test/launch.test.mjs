@@ -19,7 +19,14 @@ function installed(name) {
 }
 
 function envFor(projectDir) {
-	return { ...process.env, CLAUDE_PROJECT_DIR: projectDir, TYPESCRIPT_NATIVE_LSP_TSDK: '' };
+	const env = { ...process.env, CLAUDE_PROJECT_DIR: projectDir };
+	for (const key of Object.keys(env)) {
+		if (key.startsWith('TYPESCRIPT_NATIVE_LSP_')) {
+			delete env[key];
+		}
+	}
+	env.TYPESCRIPT_NATIVE_LSP_GLOBAL_ROOTS = '';
+	return env;
 }
 
 async function initialize(projectDir) {
@@ -54,7 +61,7 @@ test('TypeScript 7 project completes the initialize handshake with the native se
 	assert.match(message.result.serverInfo.version, /^7\./);
 	assert.equal(message.result.capabilities.hoverProvider, true);
 	assert.equal(message.result.capabilities.callHierarchyProvider, true);
-	assert.match(stderr, /TypeScript 7\.0\.2 via node_modules\/\.bin\/tsc/);
+	assert.match(stderr, /TypeScript 7\.0\.2 via node_modules\/typescript/);
 });
 
 test('aliased project completes the initialize handshake with the native server', { skip: false === installed('aliased') && 'run npm run fixtures' }, async () => {

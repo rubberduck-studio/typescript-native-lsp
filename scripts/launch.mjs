@@ -16,6 +16,7 @@
  * stderr. `--resolve` prints the resolved command as JSON and exits, for
  * troubleshooting from a shell.
  */
+import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { resolveServer, ResolveError } from './resolve.mjs';
 
@@ -23,9 +24,11 @@ const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
 const resolveOnly = process.argv.includes('--resolve');
 const bridgeDiagnostics = '0' !== process.env.TYPESCRIPT_NATIVE_LSP_DIAGNOSTICS;
 
+const globalRoots = process.env.TYPESCRIPT_NATIVE_LSP_GLOBAL_ROOTS?.split(path.delimiter).filter(Boolean);
+
 let plan;
 try {
-	plan = resolveServer({ projectDir });
+	plan = resolveServer({ projectDir, globalRoots });
 } catch (error) {
 	if (false === error instanceof ResolveError) {
 		throw error;

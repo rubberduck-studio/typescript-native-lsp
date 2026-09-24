@@ -19,7 +19,7 @@ export const claudeCodeClient = JSON.parse(fs.readFileSync(path.join(here, '..',
 export function startSession(projectDir, { env = {}, capabilities = claudeCodeClient.capabilities } = {}) {
 	const child = spawn(process.execPath, [launcher], {
 		cwd: projectDir,
-		env: { ...cleanEnv(), CLAUDE_PROJECT_DIR: projectDir, ...env },
+		env: { ...cleanEnv(), CLAUDE_PROJECT_DIR: projectDir, TYPESCRIPT_NATIVE_LSP_GLOBAL_ROOTS: '', ...env },
 		stdio: ['pipe', 'pipe', 'pipe'],
 	});
 	child.stdin.on('error', () => {});

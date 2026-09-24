@@ -4,22 +4,27 @@
  * TypeScript 7 (the native Go compiler) serves LSP itself via `tsc --lsp --stdio`
  * and ships no tsserver.js, so typescript-language-server cannot drive it.
  * TypeScript 6 and older have no `--lsp` mode and need typescript-language-server.
- * The right choice therefore depends on the TypeScript the project actually uses.
+ * The right choice therefore depends on the TypeScript the project uses.
  *
  * Resolution order:
- *   1. TYPESCRIPT_NATIVE_LSP_TSDK: an explicit path to a `typescript` package directory.
- *   2. The TypeScript the project's own `tsc` runs, found by following
- *      `node_modules/.bin/tsc` (a symlink on POSIX, npm's shell shim on Windows).
- *      This is what makes aliased installs work, where `node_modules/typescript`
- *      is a different package than the one behind `tsc`.
- *   3. `node_modules/typescript`, walking up from the project directory to the
- *      nearest lockfile or git root.
- *   4. Workspace packages under `packages/*` and `apps/*` of that root, taking the
- *      highest version.
- *   5. `tsc` or `tsgo` on PATH when they report version 7 or newer.
- *   6. typescript-language-server, project-local, then globally installed, then on PATH.
+ *   1. TYPESCRIPT_NATIVE_LSP_TSDK: an explicit path to a `typescript` package
+ *      directory (TypeScript 7 or newer).
+ *   2. The TypeScript the project declares, walking up from the project directory
+ *      to the nearest lockfile or git root: `node_modules/typescript`, plus every
+ *      dependency declared as an alias of typescript (`"name": "npm:typescript@…"`).
+ *      The highest version wins, so an aliased TypeScript 7 next to a TypeScript 6
+ *      API shim is picked up.
+ *   3. Workspace packages under `packages/*` and `apps/*` of that root, same rule.
+ *   4. A `typescript` package of version 7 or newer under the global npm root.
+ *   5. On POSIX, `tsc` or `tsgo` on PATH when they report version 7 or newer.
+ *   6. For TypeScript 6 and older: typescript-language-server, project-local, then
+ *      under the global npm root, then on PATH. It locates TypeScript itself (the
+ *      first `node_modules/typescript/lib` above the workspace), so the resolver
+ *      only checks that this will succeed and fails early with a clear message
+ *      when it will not.
  *
- * Every result is an absolute command so it can be exec'd without a PATH lookup.
+ * Every result is an absolute command so it can be exec'd without a PATH lookup,
+ * and nothing is ever run through a shell.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -27,8 +32,9 @@ import { createRequire } from 'node:module';
 import { spawnSync } from 'node:child_process';
 
 const LSP_ARGS = ['--lsp', '--stdio'];
-const ROOT_MARKERS = ['package-lock.json', 'yarn.lock', 'pnpm-lock.yaml', 'bun.lock', 'bun.lockb', '.git'];
+const ROOT_MARKERS = ['package-lock.json', 'npm-shrinkwrap.json', 'yarn.lock', 'pnpm-lock.yaml', 'bun.lock', 'bun.lockb', '.git'];
 const WORKSPACE_DIRS = ['packages', 'apps'];
+const DEPENDENCY_FIELDS = ['dependencies', 'devDependencies', 'optionalDependencies'];
 const LANGUAGE_SERVER_ENTRY = path.join('typescript-language-server', 'lib', 'cli.mjs');
 
 export class ResolveError extends Error {}
@@ -40,23 +46,36 @@ export class ResolveError extends Error {}
  * @param {NodeJS.Platform} [options.platform]
  * @param {string} [options.arch]
  * @param {string} [options.execPath]  node binary used to run JS entry points
+ * @param {string[]} [options.globalRoots]  global `node_modules` directories to search; derived from env and execPath when omitted
  * @returns {{ command: string, args: string[], shell: boolean, native: boolean, reason: string, typescript?: { dir: string, version: string } }}
  *   `native` is true when the command is TypeScript's own language server (7 or newer).
  */
-export function resolveServer({ projectDir, env = process.env, platform = process.platform, arch = process.arch, execPath = process.execPath }) {
-	const context = { env, platform, arch, execPath };
+export function resolveServer({ projectDir, env = process.env, platform = process.platform, arch = process.arch, execPath = process.execPath, globalRoots }) {
+	const context = { env, platform, arch, execPath, globalRoots: globalRoots ?? globalNodeModules({ env, platform, execPath }) };
+	const start = path.resolve(projectDir);
+
 	const override = env.TYPESCRIPT_NATIVE_LSP_TSDK;
 	if (override) {
-		const pkg = readPackage(override);
+		const dir = path.resolve(override);
+		const pkg = readPackage(dir);
 		if (null === pkg || 'typescript' !== pkg.name) {
 			throw new ResolveError(`TYPESCRIPT_NATIVE_LSP_TSDK is set to "${override}" but that is not a typescript package directory`);
 		}
-		return planFor({ dir: override, pkg, via: 'TYPESCRIPT_NATIVE_LSP_TSDK' }, projectDir, context);
+		if (majorOf(pkg.version) < 7) {
+			throw new ResolveError(`TYPESCRIPT_NATIVE_LSP_TSDK points at TypeScript ${pkg.version}; the override applies to TypeScript 7 or newer, typescript-language-server locates TypeScript 6 and older itself`);
+		}
+		return { ...nativeCommand(dir, context), reason: `TypeScript ${pkg.version} via TYPESCRIPT_NATIVE_LSP_TSDK at ${dir}`, typescript: { dir, version: pkg.version } };
 	}
 
-	const local = findProjectTypescript(projectDir);
+	const rootDir = findRootDir(start);
+	const local = findProjectTypescript(start, rootDir);
 	if (null !== local) {
-		return planFor(local, projectDir, context);
+		return majorOf(local.pkg.version) >= 7 ? nativePlan(local, context) : languageServerPlan(local, start, rootDir, context);
+	}
+
+	const global = findGlobalTypescript(context);
+	if (null !== global) {
+		return nativePlan(global, context);
 	}
 
 	const onPath = findNativeOnPath(context);
@@ -64,74 +83,73 @@ export function resolveServer({ projectDir, env = process.env, platform = proces
 		return onPath;
 	}
 
-	const languageServer = findLanguageServer(projectDir, context);
-	if (null !== languageServer) {
-		return { ...languageServer, reason: `no TypeScript found in ${projectDir}; using ${languageServer.reason}` };
-	}
-
-	throw new ResolveError(
-		`no TypeScript found in ${projectDir} or its parents, no tsc/tsgo 7+ on PATH, and no typescript-language-server installed`,
-	);
+	throw new ResolveError(`no TypeScript found in ${start} or its parents, none under a global npm root, and no tsc/tsgo 7+ on PATH`);
 }
 
-function planFor(found, projectDir, context) {
-	const major = majorOf(found.pkg.version);
-	const typescript = { dir: found.dir, version: found.pkg.version };
-	if (major >= 7) {
-		return { ...nativeCommand(found.dir, context), reason: `TypeScript ${found.pkg.version} via ${found.via} at ${found.dir}`, typescript };
-	}
-	const languageServer = findLanguageServer(projectDir, context);
-	if (null === languageServer) {
-		throw new ResolveError(
-			`TypeScript ${found.pkg.version} at ${found.dir} needs typescript-language-server, which is not installed in the project, globally, or on PATH`,
-		);
-	}
-	if (false === fs.existsSync(path.join(found.dir, 'lib', 'tsserver.js'))) {
-		process.stderr.write(
-			`[typescript-native-lsp] warning: TypeScript ${found.pkg.version} at ${found.dir} has no lib/tsserver.js; typescript-language-server will not be able to use it\n`,
-		);
-	}
-	return { ...languageServer, reason: `TypeScript ${found.pkg.version} via ${found.via} at ${found.dir}; using ${languageServer.reason}`, typescript };
+function nativePlan(found, context) {
+	return { ...nativeCommand(found.dir, context), reason: `TypeScript ${found.pkg.version} via ${found.via} at ${found.dir}`, typescript: { dir: found.dir, version: found.pkg.version } };
 }
 
-/* ---------- project-local TypeScript ---------- */
+/* ---------- project TypeScript ---------- */
 
-function findProjectTypescript(projectDir) {
-	let dir = path.resolve(projectDir);
-	let rootDir = null;
+function findRootDir(start) {
+	let dir = start;
 	while (true) {
-		const found = typescriptIn(dir);
-		if (null !== found) {
-			return found;
-		}
 		if (isRootDir(dir)) {
-			rootDir = dir;
-			break;
+			return dir;
 		}
 		const parent = path.dirname(dir);
 		if (parent === dir) {
-			break;
+			return dir;
 		}
 		dir = parent;
 	}
-	return findWorkspaceTypescript(rootDir ?? path.resolve(projectDir));
 }
 
-function typescriptIn(dir) {
-	const nodeModules = path.join(dir, 'node_modules');
-	const binTarget = resolveBinTarget(path.join(nodeModules, '.bin', 'tsc'));
-	if (null !== binTarget) {
-		const pkg = readPackage(binTarget);
-		if (null !== pkg && 'typescript' === pkg.name) {
-			return { dir: binTarget, pkg, via: 'node_modules/.bin/tsc' };
+function findProjectTypescript(start, rootDir) {
+	for (const dir of ancestors(start, rootDir)) {
+		const found = bestTypescriptIn(dir);
+		if (null !== found) {
+			return found;
 		}
 	}
-	const direct = path.join(nodeModules, 'typescript');
-	const pkg = readPackage(direct);
-	if (null !== pkg && 'typescript' === pkg.name) {
-		return { dir: direct, pkg, via: 'node_modules/typescript' };
+	return findWorkspaceTypescript(rootDir);
+}
+
+/** Every TypeScript package a directory declares, highest version first. */
+function bestTypescriptIn(dir) {
+	const nodeModules = path.join(dir, 'node_modules');
+	const candidates = [];
+	const direct = readPackage(path.join(nodeModules, 'typescript'));
+	if (null !== direct && 'typescript' === direct.name) {
+		candidates.push({ dir: path.join(nodeModules, 'typescript'), pkg: direct, via: 'node_modules/typescript' });
 	}
-	return null;
+	for (const alias of typescriptAliasesDeclaredIn(dir)) {
+		const pkg = readPackage(path.join(nodeModules, alias));
+		if (null !== pkg && 'typescript' === pkg.name) {
+			candidates.push({ dir: path.join(nodeModules, alias), pkg, via: `the "${alias}" alias of typescript` });
+		}
+	}
+	candidates.sort((a, b) => compareVersions(b.pkg.version, a.pkg.version));
+	return candidates[0] ?? null;
+}
+
+function typescriptAliasesDeclaredIn(dir) {
+	let manifest;
+	try {
+		manifest = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8'));
+	} catch {
+		return [];
+	}
+	const aliases = [];
+	for (const field of DEPENDENCY_FIELDS) {
+		for (const [name, spec] of Object.entries(manifest[field] ?? {})) {
+			if ('typescript' !== name && 'string' === typeof spec && /^npm:typescript@/.test(spec)) {
+				aliases.push(name);
+			}
+		}
+	}
+	return aliases;
 }
 
 function findWorkspaceTypescript(rootDir) {
@@ -139,7 +157,7 @@ function findWorkspaceTypescript(rootDir) {
 	for (const group of WORKSPACE_DIRS) {
 		const groupDir = path.join(rootDir, group);
 		for (const name of listDirectories(groupDir)) {
-			const found = typescriptIn(path.join(groupDir, name));
+			const found = bestTypescriptIn(path.join(groupDir, name));
 			if (null === found) {
 				continue;
 			}
@@ -149,52 +167,6 @@ function findWorkspaceTypescript(rootDir) {
 		}
 	}
 	return best;
-}
-
-/**
- * Follows `node_modules/.bin/tsc` to the package that owns it. npm links a symlink
- * on POSIX and writes a shell shim on Windows, which references the target as
- * "$basedir/../<package>/bin/tsc".
- */
-function resolveBinTarget(binPath) {
-	let stat;
-	try {
-		stat = fs.lstatSync(binPath);
-	} catch {
-		return null;
-	}
-	if (stat.isSymbolicLink()) {
-		try {
-			return packageDirOf(fs.realpathSync(binPath));
-		} catch {
-			return null;
-		}
-	}
-	if (false === stat.isFile()) {
-		return null;
-	}
-	const text = fs.readFileSync(binPath, 'utf8');
-	for (const match of text.matchAll(/"\$basedir\/([^"]+)"/g)) {
-		if ('node' === match[1]) {
-			continue;
-		}
-		return packageDirOf(path.resolve(path.dirname(binPath), match[1]));
-	}
-	return null;
-}
-
-function packageDirOf(filePath) {
-	let dir = path.dirname(filePath);
-	while (true) {
-		if (fs.existsSync(path.join(dir, 'package.json'))) {
-			return dir;
-		}
-		const parent = path.dirname(dir);
-		if (parent === dir || 'node_modules' === path.basename(dir)) {
-			return null;
-		}
-		dir = parent;
-	}
 }
 
 /* ---------- native (TypeScript 7+) ---------- */
@@ -213,10 +185,18 @@ function nativeCommand(pkgDir, { platform, arch, execPath }) {
 
 /**
  * Mirrors typescript's own lib/getExePath.js: the compiler binary lives in the
- * platform package next to the typescript package.
+ * platform package next to the typescript package. Resolution starts from the
+ * real path, because package managers that symlink packages keep the platform
+ * package next to the target, not next to the link.
  */
 function nativeExecutable(pkgDir, platform, arch) {
-	const require = createRequire(path.join(pkgDir, 'package.json'));
+	let realDir;
+	try {
+		realDir = fs.realpathSync(pkgDir);
+	} catch {
+		return null;
+	}
+	const require = createRequire(path.join(realDir, 'package.json'));
 	let platformPackageJson;
 	try {
 		platformPackageJson = require.resolve(`@typescript/typescript-${platform}-${arch}/package.json`);
@@ -227,18 +207,30 @@ function nativeExecutable(pkgDir, platform, arch) {
 	return fs.existsSync(executable) ? executable : null;
 }
 
+function findGlobalTypescript({ globalRoots }) {
+	for (const root of globalRoots) {
+		const dir = path.join(root, 'typescript');
+		const pkg = readPackage(dir);
+		if (null !== pkg && 'typescript' === pkg.name && majorOf(pkg.version) >= 7) {
+			return { dir, pkg, via: 'the global npm root' };
+		}
+	}
+	return null;
+}
+
+/** POSIX only: a `tsc` or `tsgo` on PATH that is not an npm package, such as a Homebrew install. */
 function findNativeOnPath(context) {
+	if ('win32' === context.platform) {
+		return null;
+	}
 	for (const name of ['tsc', 'tsgo']) {
-		const found = whichOnPath(name, context);
-		if (null === found) {
+		const command = whichOnPath(name, context);
+		if (null === command) {
 			continue;
 		}
-		const version = versionFromCli(found);
-		if (null === version) {
-			continue;
-		}
-		if (majorOf(version) >= 7) {
-			return { command: found.command, args: LSP_ARGS, shell: found.shell, native: true, reason: `${name} ${version} on PATH at ${found.command}` };
+		const version = versionFromCli(command);
+		if (null !== version && majorOf(version) >= 7) {
+			return { command, args: LSP_ARGS, shell: false, native: true, reason: `${name} ${version} on PATH at ${command}` };
 		}
 	}
 	return null;
@@ -246,26 +238,62 @@ function findNativeOnPath(context) {
 
 /* ---------- typescript-language-server (TypeScript <= 6) ---------- */
 
-function findLanguageServer(projectDir, context) {
-	const local = findUp(path.resolve(projectDir), dir => existingFile(path.join(dir, 'node_modules', LANGUAGE_SERVER_ENTRY)));
-	if (null !== local) {
-		return { command: context.execPath, args: [local, '--stdio'], shell: false, native: false, reason: `project-local typescript-language-server at ${local}` };
+function languageServerPlan(found, start, rootDir, context) {
+	const usable = languageServerTypescript(start);
+	if (null === usable) {
+		throw new ResolveError(
+			`TypeScript ${found.pkg.version} at ${found.dir} needs typescript-language-server, which locates TypeScript itself as the first node_modules/typescript above ${start} that ships lib/tsserver.js, and there is none; install typescript@6 as the project's "typescript" dependency`,
+		);
 	}
-	for (const root of globalNodeModules(context)) {
-		const entry = existingFile(path.join(root, LANGUAGE_SERVER_ENTRY));
+	const server = findLanguageServer(start, rootDir, context);
+	if (null === server) {
+		throw new ResolveError(
+			`TypeScript ${found.pkg.version} at ${found.dir} needs typescript-language-server, which is not installed in the project, under a global npm root, or on PATH`,
+		);
+	}
+	return {
+		...server,
+		reason: `TypeScript ${found.pkg.version} via ${found.via} at ${found.dir}; ${server.reason}, which will use ${usable}`,
+		typescript: { dir: found.dir, version: found.pkg.version },
+	};
+}
+
+/** The TypeScript typescript-language-server will pick: the first node_modules/typescript/lib above the workspace, if it has tsserver.js. */
+function languageServerTypescript(start) {
+	const lib = findUp(start, dir => existingPath(path.join(dir, 'node_modules', 'typescript', 'lib')));
+	if (null === lib) {
+		return null;
+	}
+	return fs.existsSync(path.join(lib, 'tsserver.js')) ? path.dirname(lib) : null;
+}
+
+function findLanguageServer(start, rootDir, context) {
+	for (const dir of ancestors(start, rootDir)) {
+		const entry = existingPath(path.join(dir, 'node_modules', LANGUAGE_SERVER_ENTRY));
+		if (null !== entry) {
+			return { command: context.execPath, args: [entry, '--stdio'], shell: false, native: false, reason: `project-local typescript-language-server at ${entry}` };
+		}
+	}
+	for (const root of context.globalRoots) {
+		const entry = existingPath(path.join(root, LANGUAGE_SERVER_ENTRY));
 		if (null !== entry) {
 			return { command: context.execPath, args: [entry, '--stdio'], shell: false, native: false, reason: `global typescript-language-server at ${entry}` };
 		}
 	}
-	const onPath = whichOnPath('typescript-language-server', context);
-	if (null !== onPath) {
-		return { command: onPath.command, args: ['--stdio'], shell: onPath.shell, native: false, reason: `typescript-language-server on PATH at ${onPath.command}` };
+	if ('win32' !== context.platform) {
+		const command = whichOnPath('typescript-language-server', context);
+		if (null !== command) {
+			return { command, args: ['--stdio'], shell: false, native: false, reason: `typescript-language-server on PATH at ${command}` };
+		}
 	}
 	return null;
 }
 
-function globalNodeModules({ env, platform, execPath }) {
+export function globalNodeModules({ env, platform, execPath }) {
 	const roots = [];
+	if (env.npm_config_prefix) {
+		roots.push(path.join(env.npm_config_prefix, 'win32' === platform ? 'node_modules' : path.join('lib', 'node_modules')));
+	}
 	if ('win32' === platform) {
 		if (env.APPDATA) {
 			roots.push(path.join(env.APPDATA, 'npm', 'node_modules'));
@@ -275,32 +303,24 @@ function globalNodeModules({ env, platform, execPath }) {
 		roots.push(path.join(path.dirname(execPath), '..', 'lib', 'node_modules'));
 		roots.push('/usr/local/lib/node_modules', '/opt/homebrew/lib/node_modules');
 	}
-	if (env.npm_config_prefix) {
-		roots.unshift(path.join(env.npm_config_prefix, 'win32' === platform ? 'node_modules' : path.join('lib', 'node_modules')));
-	}
 	return roots;
 }
 
 /* ---------- helpers ---------- */
 
-function whichOnPath(name, { env, platform }) {
-	const entries = (env.PATH ?? env.Path ?? '').split(path.delimiter).filter(Boolean);
-	const extensions = 'win32' === platform ? (env.PATHEXT ?? '.EXE;.CMD;.BAT').split(';') : [''];
-	for (const entry of entries) {
-		for (const extension of extensions) {
-			const candidate = path.join(entry, name + extension.toLowerCase());
-			if (false === isExecutable(candidate)) {
-				continue;
-			}
-			const shell = 'win32' === platform && '.exe' !== extension.toLowerCase();
-			return { command: candidate, shell };
+/** POSIX PATH lookup for a regular executable file. */
+function whichOnPath(name, { env }) {
+	for (const entry of (env.PATH ?? '').split(path.delimiter).filter(Boolean)) {
+		const candidate = path.join(entry, name);
+		if (isExecutable(candidate)) {
+			return candidate;
 		}
 	}
 	return null;
 }
 
-function versionFromCli({ command, shell }) {
-	const result = spawnSync(command, ['--version'], { encoding: 'utf8', timeout: 5000, shell, windowsHide: true });
+function versionFromCli(command) {
+	const result = spawnSync(command, ['--version'], { encoding: 'utf8', timeout: 5000 });
 	if (0 !== result.status) {
 		return null;
 	}
@@ -337,8 +357,24 @@ function isRootDir(dir) {
 	return ROOT_MARKERS.some(marker => fs.existsSync(path.join(dir, marker)));
 }
 
-function findUp(startDir, probe) {
-	let dir = startDir;
+/** `start` and its parents up to and including `rootDir`. */
+function* ancestors(start, rootDir) {
+	let dir = start;
+	while (true) {
+		yield dir;
+		if (dir === rootDir) {
+			return;
+		}
+		const parent = path.dirname(dir);
+		if (parent === dir) {
+			return;
+		}
+		dir = parent;
+	}
+}
+
+function findUp(start, probe) {
+	let dir = start;
 	while (true) {
 		const hit = probe(dir);
 		if (null !== hit) {
@@ -352,7 +388,7 @@ function findUp(startDir, probe) {
 	}
 }
 
-function existingFile(filePath) {
+function existingPath(filePath) {
 	return fs.existsSync(filePath) ? filePath : null;
 }
 
@@ -365,9 +401,16 @@ function isExecutable(filePath) {
 	}
 }
 
+/** Subdirectories of `dir`, following symlinks, as package managers link workspace packages. */
 function listDirectories(dir) {
 	try {
-		return fs.readdirSync(dir, { withFileTypes: true }).filter(entry => entry.isDirectory()).map(entry => entry.name);
+		return fs.readdirSync(dir).filter(name => {
+			try {
+				return fs.statSync(path.join(dir, name)).isDirectory();
+			} catch {
+				return false;
+			}
+		});
 	} catch {
 		return [];
 	}
