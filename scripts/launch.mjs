@@ -35,6 +35,7 @@ if (resolveOnly) {
 	process.exit(0);
 }
 
+log(`project dir ${projectDir}${projectDir === process.cwd() ? '' : ` (cwd ${process.cwd()})`}`);
 log(plan.reason);
 log(`launching ${plan.command} ${plan.args.join(' ')}`);
 
