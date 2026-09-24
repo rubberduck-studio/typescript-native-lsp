@@ -83,7 +83,7 @@ The one consequence: the TypeScript that runs the server is the one installed wh
 
 ## Development
 
-This plugin was built for and with the help of Claude Code and is maintained by rubberduck studio. Every change is reviewed by a person before it is merged. Behaviour was verified in real Claude Code sessions on macOS, through CI on Linux, macOS and Windows, and in git worktree sessions; see Limitations for what is known not to work.
+This plugin was built for and with the help of Claude Code and is maintained by rubberduck studio. Every change is reviewed by a human before it is merged. Behaviour was verified in real Claude Code sessions on macOS, through CI on Linux, macOS and Windows, and in git worktree sessions; see Limitations for what is known not to work.
 
 ## More Information
 - [TypeScript 7 (native compiler)](https://github.com/microsoft/TypeScript/tree/main/tsc)
