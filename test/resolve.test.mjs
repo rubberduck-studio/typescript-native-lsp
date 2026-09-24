@@ -81,7 +81,7 @@ test('TypeScript 6 project resolves to the project-local typescript-language-ser
 	assert.equal(plan.args[1], '--stdio');
 	assert.equal(plan.native, false);
 	assert.equal(plan.typescript.version, '6.0.3');
-	assert.match(plan.reason, /which will use .*node_modules\/typescript$/);
+	assert.ok(plan.reason.endsWith('which will use ' + path.join(fixture('ts6'), 'node_modules', 'typescript')), plan.reason);
 });
 
 test('aliased install picks the TypeScript 7 alias over the TypeScript 6 package named typescript', { skip: false === installed('aliased') && 'run npm run fixtures' }, () => {

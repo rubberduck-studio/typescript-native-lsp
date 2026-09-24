@@ -82,7 +82,7 @@ test('.lsp.json points Claude Code at the launcher the tests exercise', () => {
 	assert.equal(lspConfig.command, 'node');
 	const script = lspConfig.args[0].replace('${CLAUDE_PLUGIN_ROOT}', path.join(here, '..'));
 	assert.equal(path.resolve(script), launcher);
-	const readme = fs.readFileSync(path.join(here, '..', 'README.md'), 'utf8');
+	const readme = fs.readFileSync(path.join(here, '..', 'README.md'), 'utf8').replace(/\r\n/g, '\n');
 	const documented = /## Supported Extensions\n(.*)\n/.exec(readme)[1].match(/`(\.[a-z]+)`/g).map(s => s.replaceAll('`', ''));
 	assert.deepEqual(Object.keys(lspConfig.extensionToLanguage).sort(), documented.sort());
 });
