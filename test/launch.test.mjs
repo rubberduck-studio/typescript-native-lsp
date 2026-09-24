@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const launcher = path.join(here, '..', 'scripts', 'launch.mjs');
@@ -25,39 +25,47 @@ function envFor(projectDir) {
 function initialize(projectDir) {
 	return new Promise((resolve, reject) => {
 		const child = spawn(process.execPath, [launcher], { cwd: projectDir, env: envFor(projectDir), stdio: ['pipe', 'pipe', 'pipe'] });
-		let stdout = '';
+		let buffer = Buffer.alloc(0);
 		let stderr = '';
 		const timer = setTimeout(() => {
 			child.kill();
-			reject(new Error(`no initialize response within 30s\nstderr:\n${stderr}\nstdout:\n${stdout}`));
+			reject(new Error(`no initialize response within 30s\nstderr:\n${stderr}\nstdout:\n${buffer.toString('utf8')}`));
 		}, 30000);
 		child.stderr.on('data', chunk => (stderr += chunk));
 		child.stdout.on('data', chunk => {
-			stdout += chunk;
-			const match = /Content-Length: (\d+)\r\n\r\n/.exec(stdout);
-			if (null === match) {
+			buffer = Buffer.concat([buffer, chunk]);
+			for (let message = readMessage(); null !== message; message = readMessage()) {
+				if (1 !== message.id) {
+					continue;
+				}
+				clearTimeout(timer);
+				child.kill();
+				resolve({ message, stderr });
 				return;
 			}
-			const start = match.index + match[0].length;
-			const length = Number.parseInt(match[1], 10);
-			if (stdout.length < start + length) {
-				return;
-			}
-			const message = JSON.parse(stdout.slice(start, start + length));
-			if (1 !== message.id) {
-				stdout = stdout.slice(start + length);
-				return;
-			}
-			clearTimeout(timer);
-			child.kill();
-			resolve({ message, stderr });
 		});
 		child.on('error', reject);
+		/** Consumes one complete LSP message from the buffer, or returns null when none is complete yet. */
+		function readMessage() {
+			const headerEnd = buffer.indexOf('\r\n\r\n');
+			if (-1 === headerEnd) {
+				return null;
+			}
+			const header = buffer.subarray(0, headerEnd).toString('ascii');
+			const length = Number.parseInt(/Content-Length: (\d+)/.exec(header)[1], 10);
+			const bodyStart = headerEnd + 4;
+			if (buffer.length < bodyStart + length) {
+				return null;
+			}
+			const message = JSON.parse(buffer.subarray(bodyStart, bodyStart + length).toString('utf8'));
+			buffer = buffer.subarray(bodyStart + length);
+			return message;
+		}
 		const request = JSON.stringify({
 			jsonrpc: '2.0',
 			id: 1,
 			method: 'initialize',
-			params: { processId: process.pid, rootUri: 'file://' + projectDir.replace(/\\/g, '/'), capabilities: {} },
+			params: { processId: process.pid, rootUri: pathToFileURL(projectDir).href, capabilities: {} },
 		});
 		child.stdin.write(`Content-Length: ${Buffer.byteLength(request)}\r\n\r\n${request}`);
 	});
