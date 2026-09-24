@@ -1,6 +1,6 @@
 {
   "name": "typescript-native-lsp",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "TypeScript/JavaScript language server for Claude Code that runs TypeScript 7's native LSP (tsc --lsp) and falls back to typescript-language-server for TypeScript 6 and older",
   "author": {
     "name": "rubberduck studio",
@@ -10,5 +10,12 @@
   "homepage": "https://github.com/rubberduck-studio/typescript-native-lsp",
   "repository": "https://github.com/rubberduck-studio/typescript-native-lsp",
   "license": "MIT",
-  "keywords": ["lsp", "typescript", "javascript", "tsgo", "typescript-go", "language-server"]
+  "keywords": [
+    "lsp",
+    "typescript",
+    "javascript",
+    "tsgo",
+    "typescript-go",
+    "language-server"
+  ]
 }
