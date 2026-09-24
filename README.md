@@ -29,7 +29,7 @@ The last line matters. When two enabled plugins claim the same file extension, C
 ### Requirements
 
 - **Claude Code 2.1.50 or newer**, the first version that accepts the `startupTimeout` setting the plugin uses. Cloud sessions never start plugin language servers, so the plugin only works in local sessions.
-- **Node.js** on `PATH`. The launcher is a Node script; Claude Code spawns it as `node`.
+- **Node.js** on `PATH`. The launcher is a Node script; Claude Code spawns it as `node`. Any maintained Node works for TypeScript 7 projects; the TypeScript 6 fallback runs typescript-language-server 6, which requires Node 22.22 or newer.
 - **For TypeScript 7 projects:** nothing else. The project's own `typescript` dependency provides the server.
 - **For TypeScript 6 projects:** typescript-language-server, either in the project (`npm install -D typescript-language-server`) or globally (`npm install -g typescript-language-server`). It uses the project's TypeScript, which must be 6 or older. Do not install a global `typescript` for this: on a fresh machine that resolves to TypeScript 7, which has no tsserver and cannot serve TypeScript 6 projects.
 - **Projects without TypeScript:** a `tsc` of version 7 or newer on `PATH`, for example from `npm install -g typescript` or `brew install typescript`.
