@@ -1,0 +1,15 @@
+{
+  "name": "typescript-native-lsp",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Claude Code plugin: TypeScript 7 native language server with TypeScript 6 fallback",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "test": "node --test \"test/*.test.mjs\"",
+    "fixtures": "npm install --prefix test/fixtures/ts7 && npm install --prefix test/fixtures/ts6 && npm install --prefix test/fixtures/aliased"
+  }
+}

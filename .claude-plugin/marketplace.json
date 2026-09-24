@@ -1,0 +1,17 @@
+{
+  "name": "typescript-native-lsp",
+  "description": "TypeScript 7 native language server for Claude Code",
+  "owner": {
+    "name": "rubberduck studio",
+    "email": "jan@rubberduck.studio",
+    "url": "https://github.com/rubberduck-studio"
+  },
+  "plugins": [
+    {
+      "name": "typescript-native-lsp",
+      "source": "./",
+      "description": "TypeScript/JavaScript language server for Claude Code that runs TypeScript 7's native LSP (tsc --lsp) and falls back to typescript-language-server for TypeScript 6 and older",
+      "category": "development"
+    }
+  ]
+}

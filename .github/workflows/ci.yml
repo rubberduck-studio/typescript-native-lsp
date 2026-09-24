@@ -1,0 +1,34 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        node: [22, 24]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - run: npm run fixtures
+      - run: npm test
+
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: node -e "JSON.parse(require('fs').readFileSync('.lsp.json','utf8'))"
+      - run: npm install -g @anthropic-ai/claude-code
+      - run: claude plugin validate --strict .claude-plugin/plugin.json
+      - run: claude plugin validate --strict .claude-plugin/marketplace.json

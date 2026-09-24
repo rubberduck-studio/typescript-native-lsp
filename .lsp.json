@@ -1,0 +1,19 @@
+{
+  "typescript": {
+    "command": "node",
+    "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/launch.mjs"],
+    "extensionToLanguage": {
+      ".ts": "typescript",
+      ".tsx": "typescriptreact",
+      ".js": "javascript",
+      ".jsx": "javascriptreact",
+      ".mts": "typescript",
+      ".cts": "typescript",
+      ".mjs": "javascript",
+      ".cjs": "javascript"
+    },
+    "workspaceFolder": "${CLAUDE_PROJECT_DIR}",
+    "startupTimeout": 60000,
+    "maxRestarts": 3
+  }
+}

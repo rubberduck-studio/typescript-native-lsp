@@ -1,0 +1,4 @@
+node_modules/
+/package-lock.json
+test/fixtures/*/package-lock.json
+.DS_Store
