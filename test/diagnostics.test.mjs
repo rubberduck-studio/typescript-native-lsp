@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { startSession, uriOf } from './helpers/lsp-session.mjs';
+import { startSession, diagnosticsFor } from './helpers/lsp-session.mjs';
 
 const fixtures = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures');
 const FIXED = 'import { double } from "./index.js";\nexport const right: number = double(2);\n';
@@ -21,8 +21,8 @@ function installed(name) {
 	return fs.existsSync(path.join(fixture(name), 'node_modules'));
 }
 
-function diagnosticsFor(uri) {
-	return message => 'textDocument/publishDiagnostics' === message.method && message.params.uri.toLowerCase() === uri.toLowerCase();
+function hasCode(code) {
+	return message => message.params.diagnostics.some(d => d.code === code);
 }
 
 for (const name of ['ts7', 'ts6']) {
@@ -32,9 +32,8 @@ for (const name of ['ts7', 'ts6']) {
 		try {
 			await session.initialize();
 			session.openFile(file);
-			const published = await session.waitForNotification(diagnosticsFor(uriOf(file)));
-			const codes = published.params.diagnostics.map(d => d.code);
-			assert.ok(codes.includes(2322), `expected TS2322 among ${JSON.stringify(codes)}`);
+			const published = await session.waitForNotification(message => diagnosticsFor(file)(message) && hasCode(2322)(message));
+			assert.equal(published.params.diagnostics.find(d => 2322 === d.code).severity, 1);
 		} finally {
 			session.close();
 		}
@@ -46,9 +45,10 @@ for (const name of ['ts7', 'ts6']) {
 		try {
 			await session.initialize();
 			session.openFile(file);
-			await session.waitForNotification(diagnosticsFor(uriOf(file)));
+			await session.waitForNotification(message => diagnosticsFor(file)(message) && hasCode(2322)(message));
+			const before = session.notifications.length;
 			session.changeFile(file, 2, FIXED);
-			const cleared = await session.waitForNotification(message => diagnosticsFor(uriOf(file))(message) && 0 === message.params.diagnostics.length);
+			const cleared = await session.waitForNotification(message => session.notifications.indexOf(message) >= before && diagnosticsFor(file)(message) && 0 === message.params.diagnostics.length);
 			assert.deepEqual(cleared.params.diagnostics, []);
 		} finally {
 			session.close();

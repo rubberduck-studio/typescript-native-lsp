@@ -9,14 +9,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createFrameReader } from '../scripts/diagnostics-bridge.mjs';
-import { startSession, uriOf, claudeCodeClient } from './helpers/lsp-session.mjs';
+import { startSession, diagnosticsFor, claudeCodeClient } from './helpers/lsp-session.mjs';
 
 const ts7 = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'ts7');
 const skip = false === fs.existsSync(path.join(ts7, 'node_modules')) && 'run npm run fixtures';
-
-function diagnosticsFor(uri) {
-	return message => 'textDocument/publishDiagnostics' === message.method && message.params.uri.toLowerCase() === uri.toLowerCase();
-}
 
 test('TYPESCRIPT_NATIVE_LSP_DIAGNOSTICS=0 runs the native server without pushed file diagnostics', { skip }, async () => {
 	const file = path.join(ts7, 'error.ts');
@@ -24,7 +20,7 @@ test('TYPESCRIPT_NATIVE_LSP_DIAGNOSTICS=0 runs the native server without pushed 
 	try {
 		await session.initialize();
 		session.openFile(file);
-		assert.equal(await session.receivesNotification(diagnosticsFor(uriOf(file))), false);
+		assert.equal(await session.receivesNotification(diagnosticsFor(file)), false);
 		assert.match(session.stderr, /launching/);
 		assert.doesNotMatch(session.stderr, /diagnostics bridge on/);
 	} finally {
@@ -38,7 +34,7 @@ test('a client that advertises pull diagnostics switches the bridge off', { skip
 	try {
 		await session.initialize();
 		session.openFile(file);
-		assert.equal(await session.receivesNotification(diagnosticsFor(uriOf(file))), false);
+		assert.equal(await session.receivesNotification(diagnosticsFor(file)), false);
 		assert.match(session.stderr, /bridge disabled/);
 	} finally {
 		session.close();

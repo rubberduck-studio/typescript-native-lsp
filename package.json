@@ -9,7 +9,7 @@
     "node": ">=22"
   },
   "scripts": {
-    "test": "node --test \"test/*.test.mjs\"",
+    "test": "node --test --test-timeout=60000 \"test/*.test.mjs\"",
     "fixtures": "npm install --prefix test/fixtures/ts7 && npm install --prefix test/fixtures/ts6 && npm install --prefix test/fixtures/aliased"
   }
 }

@@ -1,4 +1,4 @@
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -20,8 +20,16 @@ function installed(name) {
 	return fs.existsSync(path.join(fixture(name), 'node_modules'));
 }
 
+const tempDirs = [];
+after(() => {
+	for (const dir of tempDirs) {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+});
+
 function tempDir() {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'typescript-native-lsp-'));
+	tempDirs.push(dir);
 	return dir;
 }
 

@@ -19,9 +19,10 @@ export const claudeCodeClient = JSON.parse(fs.readFileSync(path.join(here, '..',
 export function startSession(projectDir, { env = {}, capabilities = claudeCodeClient.capabilities } = {}) {
 	const child = spawn(process.execPath, [launcher], {
 		cwd: projectDir,
-		env: { ...process.env, CLAUDE_PROJECT_DIR: projectDir, TYPESCRIPT_NATIVE_LSP_TSDK: '', ...env },
+		env: { ...cleanEnv(), CLAUDE_PROJECT_DIR: projectDir, ...env },
 		stdio: ['pipe', 'pipe', 'pipe'],
 	});
+	child.stdin.on('error', () => {});
 	let buffer = Buffer.alloc(0);
 	let stderr = '';
 	let nextId = 0;
@@ -30,6 +31,16 @@ export function startSession(projectDir, { env = {}, capabilities = claudeCodeCl
 	const waiters = [];
 
 	child.stderr.on('data', chunk => (stderr += chunk));
+	child.on('exit', (code, signal) => {
+		const reason = new Error(`launcher exited (code ${code}, signal ${signal}) before answering\nstderr:\n${stderr}`);
+		for (const resolve of pending.values()) {
+			resolve({ error: { message: reason.message } });
+		}
+		pending.clear();
+		for (const waiter of waiters.splice(0)) {
+			waiter.reject(reason);
+		}
+	});
 	child.stdout.on('data', chunk => {
 		buffer = Buffer.concat([buffer, chunk]);
 		for (let message = readMessage(); null !== message; message = readMessage()) {
@@ -110,6 +121,10 @@ export function startSession(projectDir, { env = {}, capabilities = claudeCodeCl
 						clearTimeout(timer);
 						resolve(message);
 					},
+					reject: error => {
+						clearTimeout(timer);
+						reject(error);
+					},
 				};
 				waiters.push(waiter);
 			});
@@ -142,7 +157,18 @@ export function startSession(projectDir, { env = {}, capabilities = claudeCodeCl
 		changeFile(filePath, version, text) {
 			session.notify('textDocument/didChange', { textDocument: { uri: pathToFileURL(filePath).href, version }, contentChanges: [{ text }] });
 		},
+		/** Resolves once the launcher process has exited, with its exit code and signal. */
+		exited() {
+			return new Promise(resolve => {
+				if (null !== child.exitCode || null !== child.signalCode) {
+					resolve({ code: child.exitCode, signal: child.signalCode });
+					return;
+				}
+				child.once('exit', (code, signal) => resolve({ code, signal }));
+			});
+		},
 		close() {
+			child.stdin.end();
 			child.kill();
 		},
 	};
@@ -151,4 +177,29 @@ export function startSession(projectDir, { env = {}, capabilities = claudeCodeCl
 
 export function uriOf(filePath) {
 	return pathToFileURL(filePath).href;
+}
+
+/** True when two file URIs name the same file, regardless of percent-encoding or drive-letter case. */
+export function sameFile(uriA, uriB) {
+	try {
+		return fileURLToPath(uriA).toLowerCase() === fileURLToPath(uriB).toLowerCase();
+	} catch {
+		return false;
+	}
+}
+
+/** Matches publishDiagnostics notifications for one file. */
+export function diagnosticsFor(filePath) {
+	return message => 'textDocument/publishDiagnostics' === message.method && sameFile(message.params.uri, uriOf(filePath));
+}
+
+/** The parent environment without any of this plugin's own switches, so a developer's shell cannot steer a test. */
+function cleanEnv() {
+	const env = { ...process.env };
+	for (const key of Object.keys(env)) {
+		if (key.startsWith('TYPESCRIPT_NATIVE_LSP_')) {
+			delete env[key];
+		}
+	}
+	return env;
 }
