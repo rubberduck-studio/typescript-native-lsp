@@ -34,26 +34,26 @@ The last line matters. When two enabled plugins claim the same file extension, C
 
 ### Requirements
 
-- **Claude Code 2.1.50 or newer**, the first version that accepts the `startupTimeout` setting the plugin uses. Cloud sessions never start plugin language servers, so the plugin only works in local sessions.
-- **Node.js** on `PATH`. The launcher is a Node script; Claude Code spawns it as `node`. Any maintained Node works for TypeScript 7 projects; the TypeScript 6 fallback runs typescript-language-server 6, which requires Node 22.22 or newer.
+- **Claude Code 2.1.50 or newer**, the first version that accepts the `startupTimeout` setting the plugin uses; on Windows 2.1.74 or newer, which fixed file URIs. Cloud sessions never start plugin language servers, so the plugin only works in local sessions.
+- **Node.js 22 or newer** on `PATH`. The launcher is a Node script; Claude Code spawns it as `node`. The TypeScript 6 fallback runs typescript-language-server 6, which requires Node 22.22 or newer.
 - **For TypeScript 7 projects:** nothing else. The project's own `typescript` dependency provides the server.
-- **For TypeScript 6 projects:** typescript-language-server, either in the project (`npm install -D typescript-language-server`) or globally (`npm install -g typescript-language-server`). It uses the project's TypeScript, which must be 6 or older. Do not install a global `typescript` for this: on a fresh machine that resolves to TypeScript 7, which has no tsserver and cannot serve TypeScript 6 projects.
-- **Projects without TypeScript:** a `tsc` of version 7 or newer on `PATH`, for example from `npm install -g typescript` or `brew install typescript`.
+- **For TypeScript 6 projects:** typescript-language-server, either in the project (`npm install -D typescript-language-server`) or globally (`npm install -g typescript-language-server`). It locates TypeScript itself, as the project's `typescript` dependency, which must be 6 or older and a full install, not an API-only package. Do not install a global `typescript` for this: on a fresh machine that resolves to TypeScript 7, which has no tsserver and cannot serve TypeScript 6 projects.
+- **Projects without TypeScript:** a global TypeScript 7 or newer, from `npm install -g typescript` on any platform, or on macOS and Linux any `tsc` on `PATH` such as `brew install typescript`.
 
 ## How it works
 
 On every start the launcher decides which server to run for the session's project directory, in this order:
 
-1. `TYPESCRIPT_NATIVE_LSP_TSDK`, if set, as the path of a `typescript` package directory.
-2. The TypeScript the project's own `tsc` runs, found by following `node_modules/.bin/tsc` to its package. This makes aliased installs work, where `node_modules/typescript` is a different package than the one behind `tsc`.
-3. `node_modules/typescript`, walking up from the project directory to the nearest lockfile or git root.
-4. Workspace packages under `packages/*` and `apps/*` of that root, taking the highest version.
-5. `tsc` or `tsgo` on `PATH`, if `--version` reports 7 or newer.
-6. typescript-language-server, project-local, then globally installed, then on `PATH`.
+1. `TYPESCRIPT_NATIVE_LSP_TSDK`, if set, as the path of a `typescript` package directory of version 7 or newer.
+2. The TypeScript the project declares, walking up from the project directory to the nearest lockfile or git root: `node_modules/typescript`, plus any dependency declared as an alias of typescript (`"some-name": "npm:typescript@7"`). The highest version wins, so an aliased TypeScript 7 next to a TypeScript 6 API shim is picked up. This reads package.json, not bin shims, so it works the same under npm, pnpm, yarn and bun.
+3. Workspace packages under `packages/*` and `apps/*` of that root, same rule.
+4. A `typescript` package of version 7 or newer under the global npm root (`TYPESCRIPT_NATIVE_LSP_GLOBAL_ROOTS` overrides where to look, as a `PATH`-style list).
+5. On macOS and Linux, `tsc` or `tsgo` on `PATH`, if `--version` reports 7 or newer.
+6. For TypeScript 6 and older: typescript-language-server, project-local, then under the global npm root, then on macOS and Linux on `PATH`. It locates TypeScript on its own, as the first `node_modules/typescript` above the workspace, so the launcher only checks that this will succeed and fails early with an explanation when it will not.
 
-TypeScript 7 or newer runs as the native binary from its platform package, `tsc --lsp --stdio`. TypeScript 6 or older runs typescript-language-server with `--stdio`, always through `node` on its entry file, so it works where npm's `.cmd` shims cannot be spawned. On macOS and Linux the launcher replaces itself with the server, so Claude Code talks to the server directly.
+TypeScript 7 or newer runs as the native binary from its platform package, `tsc --lsp --stdio`, with the launcher in front of it as the diagnostics bridge described below. TypeScript 6 or older runs typescript-language-server with `--stdio` through `node` on its entry file; on macOS and Linux the launcher then replaces itself with the server, as it does for TypeScript 7 when the bridge is switched off. Nothing is ever run through a shell, and `.cmd` shims are never executed, which is why global installs are resolved as packages rather than found on `PATH` on Windows.
 
-The launcher makes no network requests and sends no telemetry. The only process it spawns besides the server is `tsc --version` when probing a binary on `PATH`. Everything it logs goes to stderr and shows up in `claude --debug` output prefixed with `[typescript-native-lsp]`.
+The launcher makes no network requests and sends no telemetry. The only processes it spawns besides the server are `tsc --version` and `tsgo --version`, on macOS and Linux only, when probing a binary on `PATH`. Everything it logs goes to stderr and shows up in `claude --debug` output prefixed with `[typescript-native-lsp]`.
 
 ### Troubleshooting
 
@@ -66,7 +66,7 @@ node <installPath>/scripts/launch.mjs --resolve
 
 A clone of this repository works the same way: `node scripts/launch.mjs --resolve` from inside the project directory.
 
-If a project's TypeScript is somewhere the launcher does not look, point `TYPESCRIPT_NATIVE_LSP_TSDK` at the package directory, for example `/path/to/node_modules/typescript`, in the shell that starts Claude Code.
+If a project's TypeScript 7 is somewhere the launcher does not look, point `TYPESCRIPT_NATIVE_LSP_TSDK` at the package directory, for example `/path/to/node_modules/typescript`, in the shell that starts Claude Code. The override applies to TypeScript 7 or newer; typescript-language-server finds TypeScript 6 on its own.
 
 Inside Claude Code:
 
@@ -84,7 +84,7 @@ The bridge is an interim measure. It switches itself off when the client adverti
 
 Claude Code roots the server at the directory the session started in and keeps it there when Claude enters a git worktree later: `${CLAUDE_PROJECT_DIR}` and the server's working directory stay at the original checkout, so the launcher resolves TypeScript from that checkout. Requests on worktree files are still answered correctly, because the native server resolves each opened file's own `tsconfig.json`: a type lookup finds symbols that exist only in the worktree, and references for a worktree file return worktree paths only. This holds whether the server started before or after Claude entered the worktree. A session launched inside a worktree resolves TypeScript from the worktree itself.
 
-The one consequence: the TypeScript that runs the server is the one installed where the session started. A worktree branch that changes the TypeScript version is served by the start directory's version. Launch the session inside the worktree or set `TYPESCRIPT_NATIVE_LSP_TSDK` if that matters.
+Two consequences. The TypeScript that runs the server is the one installed where the session started, so a worktree branch that changes the TypeScript version is served by the start directory's version; launch the session inside the worktree or set `TYPESCRIPT_NATIVE_LSP_TSDK` if that matters. And a session launched inside a worktree needs that worktree to have its own `node_modules`: resolution stops at the worktree's `.git` file and does not fall through to the main checkout, on purpose, since the main checkout may hold different dependency versions.
 
 ## Limitations
 
