@@ -24,13 +24,14 @@ claude plugin install typescript-native-lsp@typescript-native-lsp
 claude plugin disable typescript-lsp@claude-plugins-official
 ```
 
-The last line matters. Claude Code hands each file extension to the first plugin that claims it and never starts the other, so with both enabled one of them silently does nothing. Restart Claude Code or run `/reload-plugins` afterwards.
+The last line matters. When two enabled plugins claim the same file extension, Claude Code starts only the first one it registers and never starts the other; the `/plugin` interface shows a warning naming the active one. Which plugin registers first is not something you control, so disable `typescript-lsp` rather than relying on the order. Restart Claude Code or run `/reload-plugins` afterwards.
 
 ### Requirements
 
+- **Claude Code 2.1.50 or newer**, the first version that accepts the `startupTimeout` setting the plugin uses. Cloud sessions never start plugin language servers, so the plugin only works in local sessions.
 - **Node.js** on `PATH`. The launcher is a Node script; Claude Code spawns it as `node`.
 - **For TypeScript 7 projects:** nothing else. The project's own `typescript` dependency provides the server.
-- **For TypeScript 6 projects:** typescript-language-server, either in the project (`npm install -D typescript-language-server`) or globally (`npm install -g typescript-language-server`). It uses the project's TypeScript, which must be 6 or older; a global `typescript` install is not needed.
+- **For TypeScript 6 projects:** typescript-language-server, either in the project (`npm install -D typescript-language-server`) or globally (`npm install -g typescript-language-server`). It uses the project's TypeScript, which must be 6 or older. Do not install a global `typescript` for this: on a fresh machine that resolves to TypeScript 7, which has no tsserver and cannot serve TypeScript 6 projects.
 - **Projects without TypeScript:** a `tsc` of version 7 or newer on `PATH`, for example from `npm install -g typescript` or `brew install typescript`.
 
 ## How it works
@@ -57,6 +58,12 @@ node ~/.claude/plugins/marketplaces/typescript-native-lsp/scripts/launch.mjs --r
 ```
 
 If a project's TypeScript is somewhere the launcher does not look, point `TYPESCRIPT_NATIVE_LSP_TSDK` at the package directory, for example `/path/to/node_modules/typescript`, in the shell that starts Claude Code.
+
+Inside Claude Code:
+
+- `/plugin` lists installed plugins and shows start failures in its Errors tab, including an `Executable not found in $PATH` for a missing `node`.
+- `claude --debug` logs `Loaded 1 LSP server(s) from plugin: typescript-native-lsp` and `Total LSP servers loaded: N` at startup, then the launcher's `[typescript-native-lsp]` lines when the server starts, including the resolved project directory, TypeScript and command.
+- `/reload-plugins` picks up plugin changes without restarting the session.
 
 ## Git worktrees
 

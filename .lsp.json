@@ -13,7 +13,6 @@
       ".cjs": "javascript"
     },
     "workspaceFolder": "${CLAUDE_PROJECT_DIR}",
-    "startupTimeout": 60000,
-    "maxRestarts": 3
+    "startupTimeout": 60000
   }
 }
