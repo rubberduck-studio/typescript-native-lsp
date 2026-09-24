@@ -81,6 +81,10 @@ The one consequence: the TypeScript that runs the server is the one installed wh
 - **Monorepos with built package outputs.** When packages import each other through built declaration files (`dist/*.d.ts`), references from consuming packages resolve to the declaration files, not the source, so find-references on a source symbol will not list them. Any TypeScript server behaves this way. Claude Code additionally drops results in gitignored paths.
 - **Linux file watching.** The native server watches files itself only on macOS and Windows. On Linux, files changed outside Claude Code (git, formatters) are not picked up until they are opened.
 
+## Development
+
+This plugin was built for and with the help of Claude Code and is maintained by rubberduck studio. Every change is reviewed by a person before it is merged. Behaviour was verified in real Claude Code sessions on macOS, through CI on Linux, macOS and Windows, and in git worktree sessions; see Limitations for what is known not to work.
+
 ## More Information
 - [TypeScript 7 (native compiler)](https://github.com/microsoft/TypeScript/tree/main/tsc)
 - [typescript-language-server on npm](https://www.npmjs.com/package/typescript-language-server)
