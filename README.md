@@ -10,7 +10,7 @@ TypeScript/JavaScript language server for Claude Code that runs TypeScript 7's n
 
 ## Why this plugin exists
 
-The official `typescript-lsp` plugin launches typescript-language-server, which wraps the classic `tsserver`. TypeScript 7 is the native Go port of the compiler and ships no `tsserver.js`, so on a TypeScript 7 project that plugin fails every request with:
+The official [`typescript-lsp`](https://github.com/anthropics/claude-plugins-official/tree/main/plugins/typescript-lsp) plugin launches typescript-language-server, which wraps the classic `tsserver`. TypeScript 7 is the native Go port of the compiler and ships no `tsserver.js`, so on a TypeScript 7 project that plugin fails every request with:
 
 ```
 Could not find a valid TypeScript installation. Please ensure that the "typescript"
@@ -35,9 +35,9 @@ The last line matters. When two enabled plugins claim the same file extension, C
 ### Requirements
 
 - **Claude Code 2.1.50 or newer**, the first version that accepts the `startupTimeout` setting the plugin uses; on Windows 2.1.74 or newer, which fixed file URIs. Cloud sessions never start plugin language servers, so the plugin only works in local sessions.
-- **Node.js 22 or newer** on `PATH`. The launcher is a Node script; Claude Code spawns it as `node`. The TypeScript 6 fallback runs typescript-language-server 6, which requires Node 22.22 or newer.
+- **Node.js 22 or newer** on `PATH`. The launcher is a Node script; Claude Code spawns it as `node`. The fallback for TypeScript 6 and older runs typescript-language-server 6, which requires Node 22.22 or newer.
 - **For TypeScript 7 projects:** nothing else. The project's own `typescript` dependency provides the server.
-- **For TypeScript 6 projects:** typescript-language-server, either in the project (`npm install -D typescript-language-server`) or globally (`npm install -g typescript-language-server`). It locates TypeScript itself, as the project's `typescript` dependency, which must be 6 or older and a full install, not an API-only package. Do not install a global `typescript` for this: on a fresh machine that resolves to TypeScript 7, which has no tsserver and cannot serve TypeScript 6 projects.
+- **For TypeScript 6 and older:** typescript-language-server, either in the project (`npm install -D typescript-language-server`) or globally (`npm install -g typescript-language-server`). It locates TypeScript itself, as the project's `typescript` dependency, which must be 6 or older and a full install, not an API-only package. Do not install a global `typescript` for this: on a fresh machine that resolves to TypeScript 7, which has no tsserver and cannot serve TypeScript 6 projects.
 - **Projects without TypeScript:** a global TypeScript 7 or newer, from `npm install -g typescript` on any platform, or on macOS and Linux any `tsc` on `PATH` such as `brew install typescript`.
 
 ## How it works
@@ -66,7 +66,7 @@ node <installPath>/scripts/launch.mjs --resolve
 
 A clone of this repository works the same way: `node scripts/launch.mjs --resolve` from inside the project directory.
 
-If a project's TypeScript 7 is somewhere the launcher does not look, point `TYPESCRIPT_NATIVE_LSP_TSDK` at the package directory, for example `/path/to/node_modules/typescript`, in the shell that starts Claude Code. The override applies to TypeScript 7 or newer; typescript-language-server finds TypeScript 6 on its own.
+If a project's TypeScript 7 is somewhere the launcher does not look, point `TYPESCRIPT_NATIVE_LSP_TSDK` at the package directory, for example `/path/to/node_modules/typescript`, in the shell that starts Claude Code. The override applies to TypeScript 7 or newer; typescript-language-server finds TypeScript 6 and older on its own.
 
 Inside Claude Code:
 
@@ -76,7 +76,7 @@ Inside Claude Code:
 
 ## Diagnostics
 
-Claude Code attaches a file's type errors to the conversation after an edit, and it learns about them only through pushed `textDocument/publishDiagnostics` notifications. TypeScript 7's native server never pushes per-file diagnostics; it answers `textDocument/diagnostic` requests instead. To close that gap the launcher stays in front of the native server as a small bridge: it forwards all traffic unchanged and, after each `didOpen`, `didChange` or `didSave`, requests the file's diagnostics from the server and publishes the result to Claude Code. The effect is the same as with typescript-language-server on TypeScript 6, which pushes on its own and needs no bridge.
+Claude Code attaches a file's type errors to the conversation after an edit, and it learns about them only through pushed `textDocument/publishDiagnostics` notifications. TypeScript 7's native server never pushes per-file diagnostics; it answers `textDocument/diagnostic` requests instead. To close that gap the launcher stays in front of the native server as a small bridge: it forwards all traffic unchanged and, after each `didOpen`, `didChange` or `didSave`, requests the file's diagnostics from the server and publishes the result to Claude Code. The effect is the same as with typescript-language-server on TypeScript 6 and older, which pushes on its own and needs no bridge.
 
 The bridge is an interim measure. It switches itself off when the client advertises pull-diagnostics support, and it will be removed once TypeScript pushes for such clients ([microsoft/TypeScript#63921](https://github.com/microsoft/TypeScript/pull/63921)) or Claude Code pulls ([anthropics/claude-code#40282](https://github.com/anthropics/claude-code/issues/40282)). Set `TYPESCRIPT_NATIVE_LSP_DIAGNOSTICS=0` to run the native server directly without it; `TYPESCRIPT_NATIVE_LSP_DEBUG=1` logs each request and publish to stderr.
 
