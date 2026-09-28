@@ -3,12 +3,14 @@
  * Entry point spawned by Claude Code. Resolves the right language server for
  * the project and hands the stdio pipes over to it.
  *
- * For the native server the launcher stays in the middle as a diagnostics bridge
- * (see diagnostics-bridge.mjs), unless TYPESCRIPT_NATIVE_LSP_DIAGNOSTICS=0 opts
- * out. Otherwise, on POSIX it replaces itself with the server (execve), so Claude
- * Code talks to the server directly; on Windows, or where execve is unavailable,
- * it stays as a thin parent that forwards signals and exits with the server's
- * status.
+ * By default the launcher stays in the middle as a proxy (see proxy.mjs) with
+ * the features that work around gaps in Claude Code's LSP client: document sync
+ * for every server (TYPESCRIPT_NATIVE_LSP_DOCUMENT_SYNC=0 opts out) and the
+ * diagnostics bridge for the native server (TYPESCRIPT_NATIVE_LSP_DIAGNOSTICS=0
+ * opts out). With no feature active, on POSIX it replaces itself with the server
+ * (execve), so Claude Code talks to the server directly; on Windows, or where
+ * execve is unavailable, it stays as a thin parent that forwards signals and
+ * exits with the server's status.
  *
  * stdout carries the LSP protocol, so every message from the launcher goes to
  * stderr. `--resolve` prints the resolved command as JSON and exits, for
@@ -24,6 +26,7 @@ const KILL_GRACE_MS = 2000;
 
 const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
 const resolveOnly = process.argv.includes('--resolve');
+const syncDocuments = '0' !== process.env.TYPESCRIPT_NATIVE_LSP_DOCUMENT_SYNC;
 const bridgeDiagnostics = '0' !== process.env.TYPESCRIPT_NATIVE_LSP_DIAGNOSTICS;
 
 const globalRoots = process.env.TYPESCRIPT_NATIVE_LSP_GLOBAL_ROOTS?.split(path.delimiter).filter(Boolean);
@@ -40,10 +43,10 @@ try {
 	process.exit(1);
 }
 
-const useBridge = plan.native && bridgeDiagnostics;
+const features = [syncDocuments && 'document-sync', plan.native && bridgeDiagnostics && 'diagnostics-bridge'].filter(Boolean);
 
 if (resolveOnly) {
-	process.stdout.write(JSON.stringify({ projectDir, ...plan, diagnosticsBridge: useBridge }, null, 2) + '\n');
+	process.stdout.write(JSON.stringify({ projectDir, ...plan, proxyFeatures: features }, null, 2) + '\n');
 	process.exit(0);
 }
 
@@ -51,9 +54,16 @@ log(`project dir ${projectDir}${projectDir === process.cwd() ? '' : ` (cwd ${pro
 log(plan.reason);
 log(`launching ${plan.command} ${plan.args.join(' ')}`);
 
-if (useBridge) {
-	const { runBridge } = await import('./diagnostics-bridge.mjs');
-	runBridge({ command: plan.command, args: plan.args, log, debug: '1' === process.env.TYPESCRIPT_NATIVE_LSP_DEBUG });
+if (features.length > 0) {
+	const { runProxy } = await import('./proxy.mjs');
+	const factories = [];
+	if (features.includes('diagnostics-bridge')) {
+		factories.push((await import('./diagnostics-bridge.mjs')).diagnosticsBridge);
+	}
+	if (features.includes('document-sync')) {
+		factories.push((await import('./document-sync.mjs')).documentSync);
+	}
+	runProxy({ command: plan.command, args: plan.args, log, debug: '1' === process.env.TYPESCRIPT_NATIVE_LSP_DEBUG, features: factories });
 } else {
 	launchDirectly(plan);
 }
