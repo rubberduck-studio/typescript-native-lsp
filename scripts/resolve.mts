@@ -40,19 +40,51 @@ const LANGUAGE_SERVER_ENTRY = path.join('typescript-language-server', 'lib', 'cl
 
 export class ResolveError extends Error {}
 
-/**
- * @param {object} options
- * @param {string} options.projectDir  directory the session is rooted at
- * @param {NodeJS.ProcessEnv} [options.env]
- * @param {NodeJS.Platform} [options.platform]
- * @param {string} [options.arch]
- * @param {string} [options.execPath]  node binary used to run JS entry points
- * @param {string[]} [options.globalRoots]  global `node_modules` directories to search; derived from env and execPath when omitted
- * @returns {{ command: string, args: string[], native: boolean, reason: string, typescript?: { dir: string, version: string } }}
- *   `native` is true when the command is TypeScript's own language server (7 or newer).
- */
-export function resolveServer({ projectDir, env = process.env, platform = process.platform, arch = process.arch, execPath = process.execPath, globalRoots }) {
-	const context = { env, platform, arch, execPath, globalRoots: globalRoots ?? globalNodeModules({ env, platform, execPath }) };
+export interface ResolveOptions {
+	/** Directory the session is rooted at. */
+	projectDir: string;
+	env?: NodeJS.ProcessEnv;
+	platform?: NodeJS.Platform;
+	arch?: string;
+	/** Node binary used to run JS entry points. */
+	execPath?: string;
+	/** Global `node_modules` directories to search; derived from env and execPath when omitted. */
+	globalRoots?: string[] | undefined;
+}
+
+interface Command {
+	command: string;
+	args: string[];
+	/** True when the command is TypeScript's own language server (7 or newer). */
+	native: boolean;
+}
+
+export interface Plan extends Command {
+	reason: string;
+	typescript?: { dir: string; version: string };
+}
+
+interface PackageJson {
+	name: string;
+	version: string;
+}
+
+interface FoundTypescript {
+	dir: string;
+	pkg: PackageJson;
+	via: string;
+}
+
+interface Context {
+	env: NodeJS.ProcessEnv;
+	platform: NodeJS.Platform;
+	arch: string;
+	execPath: string;
+	globalRoots: string[];
+}
+
+export function resolveServer({ projectDir, env = process.env, platform = process.platform, arch = process.arch, execPath = process.execPath, globalRoots }: ResolveOptions): Plan {
+	const context: Context = { env, platform, arch, execPath, globalRoots: globalRoots ?? globalNodeModules({ env, platform, execPath }) };
 	const start = path.resolve(projectDir);
 
 	const override = env.TYPESCRIPT_NATIVE_LSP_TSDK;
@@ -87,13 +119,13 @@ export function resolveServer({ projectDir, env = process.env, platform = proces
 	throw new ResolveError(`no TypeScript found in ${start} or its parents, none under a global npm root, and no tsc/tsgo 7+ on PATH`);
 }
 
-function nativePlan(found, context) {
+function nativePlan(found: FoundTypescript, context: Context): Plan {
 	return { ...nativeCommand(found.dir, context), reason: `TypeScript ${found.pkg.version} via ${found.via} at ${found.dir}`, typescript: { dir: found.dir, version: found.pkg.version } };
 }
 
 /* ---------- project TypeScript ---------- */
 
-function findRootDir(start) {
+function findRootDir(start: string): string {
 	let dir = start;
 	while (true) {
 		if (isRootDir(dir)) {
@@ -107,7 +139,7 @@ function findRootDir(start) {
 	}
 }
 
-function findProjectTypescript(start, rootDir) {
+function findProjectTypescript(start: string, rootDir: string): FoundTypescript | null {
 	for (const dir of ancestors(start, rootDir)) {
 		const found = bestTypescriptIn(dir);
 		if (null !== found) {
@@ -124,9 +156,9 @@ function findProjectTypescript(start, rootDir) {
  * package ships lib/tsc.js, so only directories that have one are read, which
  * keeps a large node_modules to a directory listing and a few file checks.
  */
-function bestTypescriptIn(dir) {
+function bestTypescriptIn(dir: string): FoundTypescript | null {
 	const nodeModules = path.join(dir, 'node_modules');
-	let best = null;
+	let best: FoundTypescript | null = null;
 	for (const entry of listEntries(nodeModules)) {
 		const pkgDir = path.join(nodeModules, entry);
 		if (false === fs.existsSync(path.join(pkgDir, 'lib', 'tsc.js'))) {
@@ -144,7 +176,7 @@ function bestTypescriptIn(dir) {
 }
 
 /** Package directory names under a node_modules, with scoped packages as `@scope/name`. */
-function listEntries(nodeModules) {
+function listEntries(nodeModules: string): string[] {
 	const entries = [];
 	for (const name of listNames(nodeModules)) {
 		if (SKIPPED_ENTRIES.has(name)) {
@@ -161,7 +193,7 @@ function listEntries(nodeModules) {
 	return entries;
 }
 
-function listNames(dir) {
+function listNames(dir: string): string[] {
 	try {
 		return fs.readdirSync(dir);
 	} catch {
@@ -169,8 +201,8 @@ function listNames(dir) {
 	}
 }
 
-function findWorkspaceTypescript(rootDir) {
-	let best = null;
+function findWorkspaceTypescript(rootDir: string): FoundTypescript | null {
+	let best: FoundTypescript | null = null;
 	for (const group of WORKSPACE_DIRS) {
 		const groupDir = path.join(rootDir, group);
 		for (const name of listDirectories(groupDir)) {
@@ -188,7 +220,7 @@ function findWorkspaceTypescript(rootDir) {
 
 /* ---------- native (TypeScript 7+) ---------- */
 
-function nativeCommand(pkgDir, { platform, arch, execPath }) {
+function nativeCommand(pkgDir: string, { platform, arch, execPath }: Context): Command {
 	const executable = nativeExecutable(pkgDir, platform, arch);
 	if (null !== executable) {
 		return { command: executable, args: LSP_ARGS, native: true };
@@ -206,7 +238,7 @@ function nativeCommand(pkgDir, { platform, arch, execPath }) {
  * real path, because package managers that symlink packages keep the platform
  * package next to the target, not next to the link.
  */
-function nativeExecutable(pkgDir, platform, arch) {
+function nativeExecutable(pkgDir: string, platform: NodeJS.Platform, arch: string): string | null {
 	let realDir;
 	try {
 		realDir = fs.realpathSync(pkgDir);
@@ -224,7 +256,7 @@ function nativeExecutable(pkgDir, platform, arch) {
 	return fs.existsSync(executable) ? executable : null;
 }
 
-function findGlobalTypescript({ globalRoots }) {
+function findGlobalTypescript({ globalRoots }: Context): FoundTypescript | null {
 	for (const root of globalRoots) {
 		const dir = path.join(root, 'typescript');
 		const pkg = readPackage(dir);
@@ -236,7 +268,7 @@ function findGlobalTypescript({ globalRoots }) {
 }
 
 /** POSIX only: a `tsc` or `tsgo` on PATH that is not an npm package, such as a Homebrew install. */
-function findNativeOnPath(context) {
+function findNativeOnPath(context: Context): Plan | null {
 	if ('win32' === context.platform) {
 		return null;
 	}
@@ -255,7 +287,7 @@ function findNativeOnPath(context) {
 
 /* ---------- typescript-language-server (TypeScript <= 6) ---------- */
 
-function languageServerPlan(found, start, rootDir, context) {
+function languageServerPlan(found: FoundTypescript, start: string, rootDir: string, context: Context): Plan {
 	const usable = languageServerTypescript(start);
 	if (null === usable) {
 		throw new ResolveError(
@@ -276,7 +308,7 @@ function languageServerPlan(found, start, rootDir, context) {
 }
 
 /** The TypeScript typescript-language-server will pick: the first node_modules/typescript/lib above the workspace, if it has tsserver.js. */
-function languageServerTypescript(start) {
+function languageServerTypescript(start: string): string | null {
 	const lib = findUp(start, dir => existingPath(path.join(dir, 'node_modules', 'typescript', 'lib')));
 	if (null === lib) {
 		return null;
@@ -284,7 +316,7 @@ function languageServerTypescript(start) {
 	return fs.existsSync(path.join(lib, 'tsserver.js')) ? path.dirname(lib) : null;
 }
 
-function findLanguageServer(start, rootDir, context) {
+function findLanguageServer(start: string, rootDir: string, context: Context): Plan | null {
 	for (const dir of ancestors(start, rootDir)) {
 		const entry = existingPath(path.join(dir, 'node_modules', LANGUAGE_SERVER_ENTRY));
 		if (null !== entry) {
@@ -306,7 +338,7 @@ function findLanguageServer(start, rootDir, context) {
 	return null;
 }
 
-export function globalNodeModules({ env, platform, execPath }) {
+export function globalNodeModules({ env, platform, execPath }: Pick<Context, 'env' | 'platform' | 'execPath'>): string[] {
 	const roots = [];
 	if (env.npm_config_prefix) {
 		roots.push(path.join(env.npm_config_prefix, 'win32' === platform ? 'node_modules' : path.join('lib', 'node_modules')));
@@ -326,7 +358,7 @@ export function globalNodeModules({ env, platform, execPath }) {
 /* ---------- helpers ---------- */
 
 /** POSIX PATH lookup for a regular executable file. */
-function whichOnPath(name, { env }) {
+function whichOnPath(name: string, { env }: Context): string | null {
 	for (const entry of (env.PATH ?? '').split(path.delimiter).filter(Boolean)) {
 		const candidate = path.join(entry, name);
 		if (isExecutable(candidate)) {
@@ -336,29 +368,40 @@ function whichOnPath(name, { env }) {
 	return null;
 }
 
-function versionFromCli(command) {
+function versionFromCli(command: string): string | null {
 	const result = spawnSync(command, ['--version'], { encoding: 'utf8', timeout: 5000 });
 	if (0 !== result.status) {
 		return null;
 	}
 	const match = /Version (\d+\.\d+\.\S+)/.exec(result.stdout ?? '');
-	return null === match ? null : match[1];
+	return match?.[1] ?? null;
 }
 
-function readPackage(dir) {
+function readPackage(dir: string): PackageJson | null {
+	let text: string;
 	try {
-		const pkg = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8'));
-		return 'string' === typeof pkg.name && 'string' === typeof pkg.version ? pkg : null;
+		text = fs.readFileSync(path.join(dir, 'package.json'), 'utf8');
 	} catch {
 		return null;
 	}
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(text);
+	} catch {
+		return null;
+	}
+	return isPackageJson(parsed) ? parsed : null;
 }
 
-function majorOf(version) {
+function isPackageJson(value: unknown): value is PackageJson {
+	return 'object' === typeof value && null !== value && 'name' in value && 'string' === typeof value.name && 'version' in value && 'string' === typeof value.version;
+}
+
+function majorOf(version: string): number {
 	return Number.parseInt(version, 10);
 }
 
-function compareVersions(a, b) {
+function compareVersions(a: string, b: string): number {
 	const pa = a.split(/[.-]/).map(part => Number.parseInt(part, 10));
 	const pb = b.split(/[.-]/).map(part => Number.parseInt(part, 10));
 	for (let i = 0; i < 3; i++) {
@@ -370,12 +413,12 @@ function compareVersions(a, b) {
 	return 0;
 }
 
-function isRootDir(dir) {
+function isRootDir(dir: string): boolean {
 	return ROOT_MARKERS.some(marker => fs.existsSync(path.join(dir, marker)));
 }
 
 /** `start` and its parents up to and including `rootDir`. */
-function* ancestors(start, rootDir) {
+function* ancestors(start: string, rootDir: string): Generator<string> {
 	let dir = start;
 	while (true) {
 		yield dir;
@@ -390,7 +433,7 @@ function* ancestors(start, rootDir) {
 	}
 }
 
-function findUp(start, probe) {
+function findUp(start: string, probe: (dir: string) => string | null): string | null {
 	let dir = start;
 	while (true) {
 		const hit = probe(dir);
@@ -405,11 +448,11 @@ function findUp(start, probe) {
 	}
 }
 
-function existingPath(filePath) {
+function existingPath(filePath: string): string | null {
 	return fs.existsSync(filePath) ? filePath : null;
 }
 
-function isExecutable(filePath) {
+function isExecutable(filePath: string): boolean {
 	try {
 		fs.accessSync(filePath, fs.constants.X_OK);
 		return fs.statSync(filePath).isFile();
@@ -419,7 +462,7 @@ function isExecutable(filePath) {
 }
 
 /** Subdirectories of `dir`, following symlinks, as package managers link workspace packages. */
-function listDirectories(dir) {
+function listDirectories(dir: string): string[] {
 	try {
 		return fs.readdirSync(dir).filter(name => {
 			try {

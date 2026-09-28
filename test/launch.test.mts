@@ -1,27 +1,29 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { startSession } from './helpers/lsp-session.mjs';
+import type { InitializeResult } from 'vscode-languageserver-protocol';
+import { startSession } from './helpers/lsp-session.mts';
 
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const launcher = path.join(here, '..', 'scripts', 'launch.mjs');
 const fixtures = path.join(here, 'fixtures');
-const lspConfig = JSON.parse(fs.readFileSync(path.join(here, '..', '.lsp.json'), 'utf8')).typescript;
+const lspConfig: { command: string; args: string[]; extensionToLanguage: Record<string, string> } = JSON.parse(fs.readFileSync(path.join(here, '..', '.lsp.json'), 'utf8')).typescript;
 
-function fixture(name) {
+function fixture(name: string): string {
 	return path.join(fixtures, name);
 }
 
-function installed(name) {
+function installed(name: string): boolean {
 	return fs.existsSync(path.join(fixture(name), 'node_modules'));
 }
 
-function envFor(projectDir) {
-	const env = { ...process.env, CLAUDE_PROJECT_DIR: projectDir };
+function envFor(projectDir: string): NodeJS.ProcessEnv {
+	const env: NodeJS.ProcessEnv = { ...process.env, CLAUDE_PROJECT_DIR: projectDir };
 	for (const key of Object.keys(env)) {
 		if (key.startsWith('TYPESCRIPT_NATIVE_LSP_')) {
 			delete env[key];
@@ -31,11 +33,13 @@ function envFor(projectDir) {
 	return env;
 }
 
-async function initialize(projectDir) {
+async function initialize(projectDir: string): Promise<{ result: InitializeResult; stderr: string }> {
 	const session = startSession(projectDir);
 	try {
 		const message = await session.initialize();
-		return { message, stderr: session.stderr };
+		assert.equal(message.error, undefined, JSON.stringify(message));
+		assert.ok(isInitializeResult(message.result), JSON.stringify(message));
+		return { result: message.result, stderr: session.stderr };
 	} finally {
 		await session.close();
 	}
@@ -51,39 +55,40 @@ test('--resolve prints the plan as JSON', { skip: false === installed('ts7') && 
 });
 
 test('unresolvable project exits 1 with a message on stderr and nothing on stdout', () => {
-	const result = spawnSync(process.execPath, [launcher], { cwd: fixture('none'), env: { ...envFor(fixture('none')), PATH: '' }, encoding: 'utf8' });
+	const empty = fs.mkdtempSync(path.join(os.tmpdir(), 'typescript-native-lsp-empty-'));
+	fs.writeFileSync(path.join(empty, 'package-lock.json'), '{}');
+	const result = spawnSync(process.execPath, [launcher], { cwd: empty, env: { ...envFor(empty), PATH: '' }, encoding: 'utf8' });
+	fs.rmSync(empty, { recursive: true, force: true });
 	assert.equal(result.status, 1);
 	assert.equal(result.stdout, '');
 	assert.match(result.stderr, /\[typescript-native-lsp\] no TypeScript found/);
 });
 
 test('TypeScript 7 project completes the initialize handshake with the native server', { skip: false === installed('ts7') && 'run npm run fixtures' }, async () => {
-	const { message, stderr } = await initialize(fixture('ts7'));
-	assert.equal(message.error, undefined, JSON.stringify(message));
-	assert.match(message.result.serverInfo.version, /^7\./);
-	assert.equal(message.result.capabilities.hoverProvider, true);
-	assert.equal(message.result.capabilities.callHierarchyProvider, true);
+	const { result, stderr } = await initialize(fixture('ts7'));
+	assert.match(result.serverInfo?.version ?? '', /^7\./);
+	assert.equal(result.capabilities.hoverProvider, true);
+	assert.equal(result.capabilities.callHierarchyProvider, true);
 	assert.match(stderr, /TypeScript 7\.0\.2 via node_modules\/typescript/);
 });
 
 test('aliased project completes the initialize handshake with the native server', { skip: false === installed('aliased') && 'run npm run fixtures' }, async () => {
-	const { message } = await initialize(fixture('aliased'));
-	assert.match(message.result.serverInfo.version, /^7\./);
+	const { result } = await initialize(fixture('aliased'));
+	assert.match(result.serverInfo?.version ?? '', /^7\./);
 });
 
 test('TypeScript 6 project completes the initialize handshake with typescript-language-server', { skip: false === installed('ts6') && 'run npm run fixtures' }, async () => {
-	const { message, stderr } = await initialize(fixture('ts6'));
-	assert.equal(message.error, undefined, JSON.stringify(message));
-	assert.equal(message.result.capabilities.hoverProvider, true);
+	const { result, stderr } = await initialize(fixture('ts6'));
+	assert.equal(result.capabilities.hoverProvider, true);
 	assert.match(stderr, /TypeScript 6\.0\.3 .* typescript-language-server/);
 });
 
 test('.lsp.json points Claude Code at the launcher the tests exercise', () => {
 	assert.equal(lspConfig.command, 'node');
-	const script = lspConfig.args[0].replace('${CLAUDE_PLUGIN_ROOT}', path.join(here, '..'));
+	const script = (lspConfig.args[0] ?? '').replace('${CLAUDE_PLUGIN_ROOT}', path.join(here, '..'));
 	assert.equal(path.resolve(script), launcher);
 	const readme = fs.readFileSync(path.join(here, '..', 'README.md'), 'utf8').replace(/\r\n/g, '\n');
-	const documented = /## Supported Extensions\n(.*)\n/.exec(readme)[1].match(/`(\.[a-z]+)`/g).map(s => s.replaceAll('`', ''));
+	const documented = (/## Supported Extensions\n(.*)\n/.exec(readme)?.[1]?.match(/`(\.[a-z]+)`/g) ?? []).map(s => s.replaceAll('`', ''));
 	assert.deepEqual(Object.keys(lspConfig.extensionToLanguage).sort(), documented.sort());
 });
 
@@ -106,4 +111,8 @@ for (const name of ['ts7', 'ts6']) {
 		const { code, signal } = await session.exited();
 		assert.ok('SIGTERM' === signal || 143 === code || 1 === code, `code ${code} signal ${signal}`);
 	});
+}
+
+function isInitializeResult(value: unknown): value is InitializeResult {
+	return 'object' === typeof value && null !== value && 'capabilities' in value && 'object' === typeof value.capabilities;
 }

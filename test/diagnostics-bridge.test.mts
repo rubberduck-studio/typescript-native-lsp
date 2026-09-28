@@ -10,13 +10,13 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { startSession, diagnosticsFor, claudeCodeClient } from './helpers/lsp-session.mjs';
+import { startSession, diagnosticsFor, claudeCodeClient, type Diagnostics } from './helpers/lsp-session.mts';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const ts7 = path.join(here, 'fixtures', 'ts7');
 const skip = false === fs.existsSync(path.join(ts7, 'node_modules')) && 'run npm run fixtures';
 
-const tempDirs = [];
+const tempDirs: string[] = [];
 after(() => {
 	for (const dir of tempDirs) {
 		fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
@@ -28,7 +28,7 @@ after(() => {
  * typescript package without a platform binary and runs its lib/tsc.js with
  * node, which is exactly the fake. FAKE_PULLS scripts the server's answers.
  */
-function fakeProject(pulls) {
+function fakeProject(pulls: string): { root: string; file: string; env: NodeJS.ProcessEnv } {
 	const root = fs.mkdtempSync(path.join(os.tmpdir(), 'typescript-native-lsp-fake-'));
 	tempDirs.push(root);
 	const pkg = path.join(root, 'node_modules', 'typescript');
@@ -102,8 +102,8 @@ test('an empty first pull is retried once and the retry is published', async () 
 	try {
 		await session.initialize();
 		session.openFile(file);
-		const published = await session.waitForNotification(message => diagnosticsFor(file)(message) && message.params.diagnostics.length > 0);
-		assert.equal(published.params.diagnostics[0].message, 'pull 2');
+		const published = await session.waitForNotification((message): message is Diagnostics => diagnosticsFor(file)(message) && message.params.diagnostics.length > 0);
+		assert.equal(published.params.diagnostics[0]?.message, 'pull 2');
 	} finally {
 		await session.close();
 	}
@@ -116,7 +116,7 @@ test('a failed pull is retried once', async () => {
 		await session.initialize();
 		session.openFile(file);
 		const published = await session.waitForNotification(diagnosticsFor(file));
-		assert.equal(published.params.diagnostics[0].message, 'pull 2');
+		assert.equal(published.params.diagnostics[0]?.message, 'pull 2');
 	} finally {
 		await session.close();
 	}
@@ -142,7 +142,7 @@ test('related documents in a pull result are published too', async () => {
 		await session.initialize();
 		session.openFile(file);
 		const related = await session.waitForNotification(diagnosticsFor(path.join(root, 'other.ts')));
-		assert.equal(related.params.diagnostics[0].code, 2304);
+		assert.equal(related.params.diagnostics[0]?.code, 2304);
 		assert.equal(related.params.version, undefined);
 	} finally {
 		await session.close();

@@ -10,10 +10,11 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { startSession, uriOf } from './helpers/lsp-session.mjs';
+import type { Hover, Location, LocationLink } from 'vscode-languageserver-protocol';
+import { startSession, uriOf, diagnosticsFor, type Session } from './helpers/lsp-session.mts';
 
 const fixtures = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures');
-const tempDirs = [];
+const tempDirs: string[] = [];
 after(() => {
 	for (const dir of tempDirs) {
 		fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
@@ -21,7 +22,7 @@ after(() => {
 });
 
 /** A throwaway project that borrows a fixture's node_modules, so tests can change files freely. */
-function project(engine, files) {
+function project(engine: string, files: Record<string, string>): string {
 	const root = fs.mkdtempSync(path.join(os.tmpdir(), `typescript-native-lsp-sync-${engine}-`));
 	tempDirs.push(root);
 	fs.symlinkSync(path.join(fixtures, engine, 'node_modules'), path.join(root, 'node_modules'), 'junction');
@@ -33,29 +34,39 @@ function project(engine, files) {
 	return root;
 }
 
-function write(root, name, text) {
+function write(root: string, name: string, text: string): string {
 	const file = path.join(root, 'src', name);
 	fs.mkdirSync(path.dirname(file), { recursive: true });
 	fs.writeFileSync(file, text);
 	return file;
 }
 
-function src(root, name) {
+function src(root: string, name: string): string {
 	return path.join(root, 'src', name);
 }
 
-async function hoverText(session, file, line, character) {
-	const response = await session.request('textDocument/hover', { textDocument: { uri: uriOf(file) }, position: { line, character } });
-	const contents = response.result?.contents;
-	return [contents].flat().map(part => ('string' === typeof part ? part : part?.value ?? '')).join('\n');
+async function hoverText(session: Session, file: string, line: number, character: number): Promise<string> {
+	const { result } = await session.request('textDocument/hover', { textDocument: { uri: uriOf(file) }, position: { line, character } });
+	if (false === isHover(result)) {
+		return '';
+	}
+	return [result.contents].flat().map(part => ('string' === typeof part ? part : part.value)).join('\n');
 }
 
-async function definitionFiles(session, file, line, character) {
-	const response = await session.request('textDocument/definition', { textDocument: { uri: uriOf(file) }, position: { line, character } });
-	return [response.result ?? []].flat().map(location => fileURLToPath(location.uri ?? location.targetUri));
+async function definitionFiles(session: Session, file: string, line: number, character: number): Promise<string[]> {
+	const { result } = await session.request('textDocument/definition', { textDocument: { uri: uriOf(file) }, position: { line, character } });
+	return [result ?? []].flat().filter(isLocation).map(location => fileURLToPath('uri' in location ? location.uri : location.targetUri));
 }
 
-function settle(ms = 1000) {
+function isHover(value: unknown): value is Hover {
+	return 'object' === typeof value && null !== value && 'contents' in value;
+}
+
+function isLocation(value: unknown): value is Location | LocationLink {
+	return 'object' === typeof value && null !== value && ('uri' in value || 'targetUri' in value);
+}
+
+function settle(ms = 1000): Promise<void> {
 	return new Promise(resolve => setTimeout(resolve, ms));
 }
 
@@ -138,9 +149,10 @@ for (const engine of ['ts7', 'ts6']) {
 			const main = write(root, 'main.ts', text);
 			await hoverText(session, src(root, 'user.ts'), 0, 10);
 			session.openFile(main, text);
-			const published = await session.waitForNotification(message => 'textDocument/publishDiagnostics' === message.method && message.params.uri.endsWith('/main.ts') && message.params.diagnostics.every(d => 2322 !== d.code), { timeoutMs: 8000 }).catch(() => null);
-			const last = session.notifications.filter(message => 'textDocument/publishDiagnostics' === message.method && message.params.uri.endsWith('/main.ts')).at(-1);
-			assert.ok(null !== published && null !== last, 'no diagnostics published for main.ts');
+			await session.waitForNotification(diagnosticsFor(main), { timeoutMs: 8000 });
+			await settle(500);
+			const last = session.notifications.filter(diagnosticsFor(main)).at(-1);
+			assert.ok(undefined !== last, 'no diagnostics published for main.ts');
 			assert.deepEqual(last.params.diagnostics.map(d => d.code), [], JSON.stringify(last.params.diagnostics.map(d => d.message)));
 		} finally {
 			await session.close();

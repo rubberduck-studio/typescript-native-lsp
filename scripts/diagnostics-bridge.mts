@@ -2,7 +2,7 @@
  * Pull-to-push diagnostics bridge for TypeScript's native language server.
  *
  * TODO(upstream): delete this file, its tests, test/helpers/fake-native-server.mjs
- * and its entry in launch.mjs once either side closes the gap: TypeScript pushing
+ * and its entry in main.mts once either side closes the gap: TypeScript pushing
  * per-file diagnostics for clients without pull support (microsoft/TypeScript#63921),
  * or Claude Code requesting diagnostics itself (anthropics/claude-code#40282). The
  * feature switches itself off when the client advertises pull support.
@@ -13,25 +13,43 @@
  * and whenever another feature reports a document changed, this feature requests
  * the file's diagnostics from the server and publishes the result to the client.
  */
+import type { Diagnostic, DocumentDiagnosticReport } from 'vscode-languageserver-protocol';
+import { isMethod, methodMessage, type Feature, type Message, type ProxyContext } from './proxy.mts';
+
 const DEBOUNCE_MS = 50;
 const RETRY_MS = 300;
-const DOCUMENT_METHODS = new Set(['textDocument/didOpen', 'textDocument/didChange', 'textDocument/didSave']);
 
-export function diagnosticsBridge(ctx) {
+interface TrackedDocument {
+	/** Bumped on every change, so results for superseded content are dropped. */
+	generation: number;
+	/** The client's version, echoed in published diagnostics. */
+	clientVersion: number | null;
+	timer: NodeJS.Timeout | null;
+}
+
+interface PendingPull {
+	uri: string;
+	generation: number;
+	retried: boolean;
+}
+
+export function diagnosticsBridge(ctx: ProxyContext): Feature {
 	let enabled = true;
 	let firstPullDone = false;
-	/** @type {Map<string, { generation: number, clientVersion: number | null, timer: NodeJS.Timeout | null }>} */
-	const documents = new Map();
-	/** @type {Map<string, { uri: string, generation: number, retried: boolean }>} */
-	const pending = new Map();
-	const retries = new Set();
+	const documents = new Map<string, TrackedDocument>();
+	const pending = new Map<string, PendingPull>();
+	const retries = new Set<NodeJS.Timeout>();
 
 	ctx.log('diagnostics bridge on; set TYPESCRIPT_NATIVE_LSP_DIAGNOSTICS=0 to run the server without it');
-	ctx.on('changed', uri => enabled && schedule(uri, undefined));
+	ctx.on('changed', uri => {
+		if (enabled) {
+			schedule(uri, null);
+		}
+	});
 	ctx.on('closed', uri => forget(uri));
 	ctx.on('shutdown', () => {
 		for (const document of documents.values()) {
-			clearTimeout(document.timer ?? undefined);
+			clearTimer(document.timer);
 		}
 		for (const timer of retries) {
 			clearTimeout(timer);
@@ -41,19 +59,28 @@ export function diagnosticsBridge(ctx) {
 
 	return {
 		onClient(message) {
-			if ('initialize' === message.method && undefined !== message.params?.capabilities?.textDocument?.diagnostic) {
+			if (isMethod(message, 'initialize') && undefined !== message.params.capabilities.textDocument?.diagnostic) {
 				enabled = false;
 				ctx.log('client supports pull diagnostics; bridge disabled');
 			}
-			if (enabled && DOCUMENT_METHODS.has(message.method)) {
+			if (false === enabled) {
+				return true;
+			}
+			if (isMethod(message, 'textDocument/didOpen') || isMethod(message, 'textDocument/didChange')) {
 				schedule(message.params.textDocument.uri, message.params.textDocument.version);
 			}
-			if ('textDocument/didClose' === message.method) {
+			if (isMethod(message, 'textDocument/didSave')) {
+				schedule(message.params.textDocument.uri, null);
+			}
+			if (isMethod(message, 'textDocument/didClose')) {
 				forget(message.params.textDocument.uri);
 			}
 			return true;
 		},
 		onServer(message) {
+			if ('string' !== typeof message.id) {
+				return;
+			}
 			const request = pending.get(message.id);
 			pending.delete(message.id);
 			if (undefined !== request) {
@@ -62,13 +89,13 @@ export function diagnosticsBridge(ctx) {
 		},
 	};
 
-	function schedule(uri, clientVersion) {
+	function schedule(uri: string, clientVersion: number | null): void {
 		const document = documents.get(uri) ?? { generation: 0, clientVersion: null, timer: null };
 		document.generation += 1;
-		if ('number' === typeof clientVersion) {
+		if (null !== clientVersion) {
 			document.clientVersion = clientVersion;
 		}
-		clearTimeout(document.timer ?? undefined);
+		clearTimer(document.timer);
 		document.timer = setTimeout(() => {
 			document.timer = null;
 			request(uri, document.generation, false);
@@ -76,12 +103,12 @@ export function diagnosticsBridge(ctx) {
 		documents.set(uri, document);
 	}
 
-	function forget(uri) {
-		clearTimeout(documents.get(uri)?.timer ?? undefined);
+	function forget(uri: string): void {
+		clearTimer(documents.get(uri)?.timer ?? null);
 		documents.delete(uri);
 	}
 
-	function request(uri, generation, retried) {
+	function request(uri: string, generation: number, retried: boolean): void {
 		ctx.beforeRequest();
 		if (documents.get(uri)?.generation !== generation) {
 			return;
@@ -89,11 +116,11 @@ export function diagnosticsBridge(ctx) {
 		const id = ctx.requestId('diagnostics');
 		pending.set(id, { uri, generation, retried });
 		ctx.trace(`pull ${uri}${retried ? ' (retry)' : ''}`);
-		ctx.toServer({ jsonrpc: '2.0', id, method: 'textDocument/diagnostic', params: { textDocument: { uri } } });
+		ctx.toServer(methodMessage('textDocument/diagnostic', { textDocument: { uri } }, id));
 	}
 
 	/** Re-requests once, later, unless the document changed or was closed in the meantime. */
-	function scheduleRetry(uri, generation) {
+	function scheduleRetry(uri: string, generation: number): void {
 		const timer = setTimeout(() => {
 			retries.delete(timer);
 			if (documents.get(uri)?.generation === generation) {
@@ -103,7 +130,7 @@ export function diagnosticsBridge(ctx) {
 		retries.add(timer);
 	}
 
-	function handlePullResult({ uri, generation, retried }, message) {
+	function handlePullResult({ uri, generation, retried }: PendingPull, message: Message): void {
 		const current = documents.get(uri);
 		if (undefined === current || current.generation !== generation) {
 			ctx.trace(`drop stale result for ${uri}`);
@@ -116,7 +143,7 @@ export function diagnosticsBridge(ctx) {
 			}
 			return;
 		}
-		const report = message.result;
+		const report = isReport(message.result) ? message.result : null;
 		if ('full' === report?.kind) {
 			publish(uri, current.clientVersion, report.items);
 		}
@@ -127,18 +154,24 @@ export function diagnosticsBridge(ctx) {
 		}
 		if (false === firstPullDone) {
 			firstPullDone = true;
-			if (false === retried && 0 === (report?.items?.length ?? 0)) {
+			if (false === retried && 'full' === report?.kind && 0 === report.items.length) {
 				scheduleRetry(uri, generation);
 			}
 		}
 	}
 
-	function publish(uri, version, diagnostics) {
+	function publish(uri: string, version: number | null, diagnostics: Diagnostic[]): void {
 		ctx.trace(`publish ${uri}: ${diagnostics.length} item(s)`);
-		const params = { uri, diagnostics };
-		if (null !== version) {
-			params.version = version;
-		}
-		ctx.toClient({ jsonrpc: '2.0', method: 'textDocument/publishDiagnostics', params });
+		ctx.toClient(methodMessage('textDocument/publishDiagnostics', null === version ? { uri, diagnostics } : { uri, version, diagnostics }));
+	}
+}
+
+function isReport(value: unknown): value is DocumentDiagnosticReport {
+	return 'object' === typeof value && null !== value && 'kind' in value && ('full' === value.kind || 'unchanged' === value.kind);
+}
+
+function clearTimer(timer: NodeJS.Timeout | null): void {
+	if (null !== timer) {
+		clearTimeout(timer);
 	}
 }

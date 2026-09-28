@@ -1,101 +1,12 @@
 #!/usr/bin/env node
 /**
- * Entry point spawned by Claude Code. Resolves the right language server for
- * the project and hands the stdio pipes over to it.
- *
- * By default the launcher stays in the middle as a proxy (see proxy.mjs) with
- * the features that work around gaps in Claude Code's LSP client: document sync
- * for every server (TYPESCRIPT_NATIVE_LSP_DOCUMENT_SYNC=0 opts out) and the
- * diagnostics bridge for the native server (TYPESCRIPT_NATIVE_LSP_DIAGNOSTICS=0
- * opts out). With no feature active, on POSIX it replaces itself with the server
- * (execve), so Claude Code talks to the server directly; on Windows, or where
- * execve is unavailable, it stays as a thin parent that forwards signals and
- * exits with the server's status.
- *
- * stdout carries the LSP protocol, so every message from the launcher goes to
- * stderr. `--resolve` prints the resolved command as JSON and exits, for
- * troubleshooting from a shell.
+ * Entry point spawned by Claude Code. Deliberately plain JavaScript: it checks
+ * that this Node can run the plugin's TypeScript sources, which it does by
+ * stripping types (Node 22.18 and newer), and otherwise explains what is missing
+ * instead of failing with a syntax error. The launcher itself is main.mts.
  */
-import path from 'node:path';
-import os from 'node:os';
-import { spawn } from 'node:child_process';
-import { resolveServer, ResolveError } from './resolve.mjs';
-
-const SIGNALS = ['SIGINT', 'SIGTERM', 'SIGHUP'];
-const KILL_GRACE_MS = 2000;
-
-const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
-const resolveOnly = process.argv.includes('--resolve');
-const syncDocuments = '0' !== process.env.TYPESCRIPT_NATIVE_LSP_DOCUMENT_SYNC;
-const bridgeDiagnostics = '0' !== process.env.TYPESCRIPT_NATIVE_LSP_DIAGNOSTICS;
-
-const globalRoots = process.env.TYPESCRIPT_NATIVE_LSP_GLOBAL_ROOTS?.split(path.delimiter).filter(Boolean);
-
-let plan;
-try {
-	plan = resolveServer({ projectDir, globalRoots });
-} catch (error) {
-	if (false === error instanceof ResolveError) {
-		throw error;
-	}
-	log(error.message);
-	log('set TYPESCRIPT_NATIVE_LSP_TSDK to a typescript package directory, install typescript in the project, or install typescript-language-server for TypeScript 6 and older');
+if (!process.features.typescript) {
+	process.stderr.write(`[typescript-native-lsp] Node ${process.versions.node} cannot strip TypeScript types, which this plugin needs: use Node 22.18 or newer, and do not disable type stripping (--no-experimental-strip-types in NODE_OPTIONS)\n`);
 	process.exit(1);
 }
-
-const features = [syncDocuments && 'document-sync', plan.native && bridgeDiagnostics && 'diagnostics-bridge'].filter(Boolean);
-
-if (resolveOnly) {
-	process.stdout.write(JSON.stringify({ projectDir, ...plan, proxyFeatures: features }, null, 2) + '\n');
-	process.exit(0);
-}
-
-log(`project dir ${projectDir}${projectDir === process.cwd() ? '' : ` (cwd ${process.cwd()})`}`);
-log(plan.reason);
-log(`launching ${plan.command} ${plan.args.join(' ')}`);
-
-if (features.length > 0) {
-	const { runProxy } = await import('./proxy.mjs');
-	const factories = [];
-	if (features.includes('diagnostics-bridge')) {
-		factories.push((await import('./diagnostics-bridge.mjs')).diagnosticsBridge);
-	}
-	if (features.includes('document-sync')) {
-		factories.push((await import('./document-sync.mjs')).documentSync);
-	}
-	runProxy({ command: plan.command, args: plan.args, log, debug: '1' === process.env.TYPESCRIPT_NATIVE_LSP_DEBUG, features: factories });
-} else {
-	launchDirectly(plan);
-}
-
-function launchDirectly({ command, args }) {
-	if ('function' === typeof process.execve && 'win32' !== process.platform) {
-		try {
-			process.execve(command, [command, ...args], process.env);
-		} catch (error) {
-			log(`execve failed (${error.message}); spawning instead`);
-		}
-	}
-
-	const child = spawn(command, args, { stdio: 'inherit', windowsHide: true });
-	for (const signal of SIGNALS) {
-		process.on(signal, () => {
-			child.kill(signal);
-			setTimeout(() => child.kill('SIGKILL'), KILL_GRACE_MS).unref();
-		});
-	}
-	child.on('error', error => {
-		log(`failed to start ${command}: ${error.message}`);
-		process.exitCode = 1;
-	});
-	child.on('close', (code, signal) => {
-		if (null !== signal) {
-			log(`server exited on ${signal}`);
-		}
-		process.exitCode = null !== signal ? 128 + (os.constants.signals[signal] ?? 0) : code ?? 1;
-	});
-}
-
-function log(message) {
-	process.stderr.write(`[typescript-native-lsp] ${message}\n`);
-}
+await import('./main.mts');

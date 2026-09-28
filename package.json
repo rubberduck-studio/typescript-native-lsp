@@ -9,7 +9,13 @@
     "node": ">=22.22"
   },
   "scripts": {
-    "test": "node --test --test-timeout=60000 \"test/*.test.mjs\"",
-    "fixtures": "npm install --prefix test/fixtures/ts7 && npm install --prefix test/fixtures/ts6 && npm install --prefix test/fixtures/aliased"
+    "test": "node --test --test-timeout=60000 \"test/*.test.mts\"",
+    "fixtures": "npm install --prefix test/fixtures/ts7 && npm install --prefix test/fixtures/ts6 && npm install --prefix test/fixtures/aliased",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.4",
+    "typescript": "7.0.2",
+    "vscode-languageserver-protocol": "3.18.4"
   }
 }

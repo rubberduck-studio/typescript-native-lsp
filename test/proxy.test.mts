@@ -1,9 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createFrameReader, exitStatus } from '../scripts/proxy.mjs';
+import { createFrameReader, exitStatus } from '../scripts/proxy.mts';
 
 test('frame reader forwards untouched frames byte for byte and withholds consumed ones', () => {
-	const written = [];
+	const written: Buffer[] = [];
 	const seen = [];
 	const reader = createFrameReader({
 		wants: () => true,
@@ -11,9 +11,9 @@ test('frame reader forwards untouched frames byte for byte and withholds consume
 			seen.push(message);
 			return 'keep' === message.method;
 		},
-		target: { write: chunk => written.push(Buffer.from(chunk)) },
+		target: { write: (chunk: string | Uint8Array) => written.push(Buffer.from(chunk)) > 0 },
 	});
-	const frame = body => `Content-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`;
+	const frame = (body: string): string => `Content-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`;
 	const keep = frame('{"jsonrpc":"2.0","method":"keep","params":{"text":"ünïcödé"}}');
 	const drop = frame('{"jsonrpc":"2.0","id":"x","result":null}');
 	const bytes = Buffer.from(keep + drop + keep, 'utf8');
@@ -26,8 +26,8 @@ test('frame reader forwards untouched frames byte for byte and withholds consume
 });
 
 test('frame reader forwards unwanted frames without parsing them', () => {
-	const written = [];
-	const reader = createFrameReader({ wants: () => false, inspect: () => assert.fail('must not parse'), target: { write: chunk => written.push(Buffer.from(chunk)) } });
+	const written: Buffer[] = [];
+	const reader = createFrameReader({ wants: () => false, inspect: () => assert.fail('must not parse'), target: { write: (chunk: string | Uint8Array) => written.push(Buffer.from(chunk)) > 0 } });
 	const frame = 'Content-Length: 12\r\nContent-Type: application/vscode-jsonrpc; charset=utf-8\r\n\r\nnot json {{{';
 	reader.push(Buffer.from(frame));
 	assert.equal(Buffer.concat(written).toString('utf8'), frame);
@@ -37,7 +37,7 @@ test('frame reader joins a large body once instead of per chunk', () => {
 	const body = JSON.stringify({ jsonrpc: '2.0', id: 1, result: 'x'.repeat(8 * 1024 * 1024) });
 	const bytes = Buffer.from(`Content-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`);
 	let frames = 0;
-	const reader = createFrameReader({ wants: () => false, inspect: () => true, target: { write: () => frames++ } });
+	const reader = createFrameReader({ wants: () => false, inspect: () => true, target: { write: () => ++frames > 0 } });
 	const started = process.hrtime.bigint();
 	for (let offset = 0; offset < bytes.length; offset += 65536) {
 		reader.push(bytes.subarray(offset, offset + 65536));
@@ -48,18 +48,18 @@ test('frame reader joins a large body once instead of per chunk', () => {
 });
 
 test('frame reader rejects a frame without Content-Length', () => {
-	const reader = createFrameReader({ wants: () => true, inspect: () => true, target: { write() {} } });
+	const reader = createFrameReader({ wants: () => true, inspect: () => true, target: { write: () => true } });
 	assert.throws(() => reader.push(Buffer.from('Content-Type: text\r\n\r\n{}')), /Content-Length/);
 });
 
 test('frame reader forwards a replacement message returned by inspect', () => {
-	const written = [];
-	const reader = createFrameReader({ wants: () => true, inspect: message => ({ ...message, rewritten: true }), target: { write: chunk => written.push(Buffer.from(chunk)) } });
+	const written: Buffer[] = [];
+	const reader = createFrameReader({ wants: () => true, inspect: message => ({ ...message, rewritten: true }), target: { write: (chunk: string | Uint8Array) => written.push(Buffer.from(chunk)) > 0 } });
 	const body = '{"jsonrpc":"2.0","method":"m","params":{}}';
 	reader.push(Buffer.from(`Content-Length: ${body.length}\r\n\r\n${body}`));
 	const out = Buffer.concat(written).toString('utf8');
 	const json = out.slice(out.indexOf('\r\n\r\n') + 4);
-	assert.equal(Number(/Content-Length: (\d+)/.exec(out)[1]), Buffer.byteLength(json));
+	assert.equal(Number(/Content-Length: (\d+)/.exec(out)?.[1]), Buffer.byteLength(json));
 	assert.deepEqual(JSON.parse(json), { jsonrpc: '2.0', method: 'm', params: {}, rewritten: true });
 });
 

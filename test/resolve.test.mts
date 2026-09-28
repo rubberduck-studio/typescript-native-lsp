@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { resolveServer, ResolveError } from '../scripts/resolve.mjs';
+import { resolveServer, ResolveError } from '../scripts/resolve.mts';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const fixtures = path.join(here, 'fixtures');
@@ -14,34 +14,34 @@ const nativeBinary = path.join('lib', 'win32' === platform ? 'tsc.exe' : 'tsc');
 const hermetic = { env: { PATH: '' }, globalRoots: [] };
 const noNode = path.join(os.tmpdir(), 'nowhere', 'bin', 'node');
 
-const tempDirs = [];
+const tempDirs: string[] = [];
 after(() => {
 	for (const dir of tempDirs) {
 		fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
 	}
 });
 
-function fixture(name) {
+function fixture(name: string): string {
 	return path.join(fixtures, name);
 }
 
-function installed(name) {
+function installed(name: string): boolean {
 	return fs.existsSync(path.join(fixture(name), 'node_modules'));
 }
 
-function tempDir() {
+function tempDir(): string {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'typescript-native-lsp-'));
 	tempDirs.push(dir);
 	return dir;
 }
 
-function writeJson(filePath, data) {
+function writeJson(filePath: string, data: unknown): void {
 	fs.mkdirSync(path.dirname(filePath), { recursive: true });
 	fs.writeFileSync(filePath, JSON.stringify(data));
 }
 
 /** A fake `typescript` package: package.json plus lib/tsc.js, optionally lib/tsserver.js, no platform binary. */
-function writeFakeTypescript(dir, version, { tsserver = false } = {}) {
+function writeFakeTypescript(dir: string, version: string, { tsserver = false }: { tsserver?: boolean } = {}): void {
 	writeJson(path.join(dir, 'package.json'), { name: 'typescript', version });
 	fs.mkdirSync(path.join(dir, 'lib'), { recursive: true });
 	fs.writeFileSync(path.join(dir, 'lib', 'tsc.js'), '');
@@ -50,14 +50,14 @@ function writeFakeTypescript(dir, version, { tsserver = false } = {}) {
 	}
 }
 
-function writeFakeLanguageServer(root) {
+function writeFakeLanguageServer(root: string): string {
 	const entry = path.join(root, 'typescript-language-server', 'lib', 'cli.mjs');
 	fs.mkdirSync(path.dirname(entry), { recursive: true });
 	fs.writeFileSync(entry, '');
 	return entry;
 }
 
-function writeFakePlatformPackage(nodeModules) {
+function writeFakePlatformPackage(nodeModules: string): string {
 	const dir = path.join(nodeModules, '@typescript', `typescript-${platform}-${process.arch}`);
 	writeJson(path.join(dir, 'package.json'), { name: `@typescript/typescript-${platform}-${process.arch}`, version: '7.0.2' });
 	fs.mkdirSync(path.join(dir, 'lib'), { recursive: true });
@@ -70,31 +70,31 @@ test('TypeScript 7 project resolves to the native platform binary', { skip: fals
 	assert.ok(plan.command.endsWith(path.join('@typescript', `typescript-${platform}-${process.arch}`, nativeBinary)), plan.command);
 	assert.deepEqual(plan.args, ['--lsp', '--stdio']);
 	assert.equal(plan.native, true);
-	assert.equal(plan.typescript.version, '7.0.2');
+	assert.equal(plan.typescript?.version, '7.0.2');
 	assert.match(plan.reason, /via node_modules\/typescript/);
 });
 
 test('TypeScript 6 project resolves to the project-local typescript-language-server and names the TypeScript it will use', { skip: false === installed('ts6') && 'run npm run fixtures' }, () => {
 	const plan = resolveServer({ projectDir: fixture('ts6'), ...hermetic });
 	assert.equal(plan.command, process.execPath);
-	assert.ok(plan.args[0].endsWith(path.join('typescript-language-server', 'lib', 'cli.mjs')), plan.args[0]);
+	assert.ok(plan.args[0]?.endsWith(path.join('typescript-language-server', 'lib', 'cli.mjs')), plan.args[0]);
 	assert.equal(plan.args[1], '--stdio');
 	assert.equal(plan.native, false);
-	assert.equal(plan.typescript.version, '6.0.3');
+	assert.equal(plan.typescript?.version, '6.0.3');
 	assert.ok(plan.reason.endsWith('which will use ' + path.join(fixture('ts6'), 'node_modules', 'typescript')), plan.reason);
 });
 
 test('aliased install picks the TypeScript 7 alias over the TypeScript 6 package named typescript', { skip: false === installed('aliased') && 'run npm run fixtures' }, () => {
 	const plan = resolveServer({ projectDir: fixture('aliased'), ...hermetic });
 	assert.ok(plan.command.endsWith(nativeBinary), plan.command);
-	assert.equal(plan.typescript.version, '7.0.2');
-	assert.ok(plan.typescript.dir.endsWith(path.join('@typescript', 'native')), plan.typescript.dir);
+	assert.equal(plan.typescript?.version, '7.0.2');
+	assert.ok(plan.typescript?.dir.endsWith(path.join('@typescript', 'native')), plan.typescript?.dir);
 	assert.match(plan.reason, /alias of typescript/);
 });
 
 test('nested directory walks up to the project TypeScript', { skip: false === installed('ts7') && 'run npm run fixtures' }, () => {
 	const plan = resolveServer({ projectDir: path.join(fixture('ts7'), 'src', 'deep'), ...hermetic });
-	assert.equal(plan.typescript.version, '7.0.2');
+	assert.equal(plan.typescript?.version, '7.0.2');
 });
 
 test('an aliased typescript is found by its package name, wherever it was hoisted', () => {
@@ -105,7 +105,7 @@ test('an aliased typescript is found by its package name, wherever it was hoiste
 	writeFakeTypescript(path.join(root, 'node_modules', '@scope', 'ts-alias'), '7.1.0');
 	writeJson(path.join(root, 'node_modules', 'typescript', 'package.json'), { name: '@typescript/typescript6', version: '6.0.2' });
 	const plan = resolveServer({ projectDir: path.join(root, 'packages', 'lib'), ...hermetic });
-	assert.equal(plan.typescript.version, '7.1.0');
+	assert.equal(plan.typescript?.version, '7.1.0');
 	assert.equal(plan.args[0], path.join(root, 'node_modules', '@scope', 'ts-alias', 'lib', 'tsc.js'));
 	assert.match(plan.reason, /node_modules\/@scope\/ts-alias, an alias of typescript/);
 });
@@ -114,7 +114,7 @@ test('a package named typescript but installed under another name still counts',
 	const root = tempDir();
 	writeFakeTypescript(path.join(root, 'node_modules', 'ts-next'), '7.2.0');
 	const plan = resolveServer({ projectDir: root, ...hermetic });
-	assert.equal(plan.typescript.version, '7.2.0');
+	assert.equal(plan.typescript?.version, '7.2.0');
 });
 
 test('pnpm-style symlinked typescript resolves the platform binary next to the real package', { skip: 'win32' === platform && 'symlink layout' }, () => {
@@ -142,7 +142,7 @@ test('workspace packages under a lockfile root are scanned and the highest versi
 	writeFakeTypescript(path.join(root, 'packages', 'a', 'node_modules', 'typescript'), '6.0.3', { tsserver: true });
 	writeFakeTypescript(path.join(root, 'apps', 'b', 'node_modules', 'typescript'), '7.0.2');
 	const plan = resolveServer({ projectDir: path.join(root, 'tools'), ...hermetic });
-	assert.equal(plan.typescript.version, '7.0.2');
+	assert.equal(plan.typescript?.version, '7.0.2');
 	assert.match(plan.reason, /workspace package apps\/b/);
 });
 
@@ -154,7 +154,7 @@ test('workspace scan follows symlinked package directories', { skip: 'win32' ===
 	fs.mkdirSync(path.join(root, 'packages'));
 	fs.symlinkSync(real, path.join(root, 'packages', 'lib-a'));
 	const plan = resolveServer({ projectDir: root, ...hermetic });
-	assert.equal(plan.typescript.version, '7.0.2');
+	assert.equal(plan.typescript?.version, '7.0.2');
 });
 
 test('walk-up stops at the lockfile root', () => {
@@ -172,13 +172,13 @@ test('TYPESCRIPT_NATIVE_LSP_TSDK overrides project resolution, also as a relativ
 	const tsdk = path.join(root, 'elsewhere', 'typescript');
 	writeFakeTypescript(tsdk, '7.0.2');
 	const absolute = resolveServer({ projectDir: root, ...hermetic, env: { PATH: '', TYPESCRIPT_NATIVE_LSP_TSDK: tsdk } });
-	assert.equal(absolute.typescript.dir, tsdk);
+	assert.equal(absolute.typescript?.dir, tsdk);
 	assert.match(absolute.reason, /TYPESCRIPT_NATIVE_LSP_TSDK/);
 	const previous = process.cwd();
 	process.chdir(root);
 	try {
 		const relative = resolveServer({ projectDir: root, ...hermetic, env: { PATH: '', TYPESCRIPT_NATIVE_LSP_TSDK: path.join('elsewhere', 'typescript') } });
-		assert.equal(fs.realpathSync(relative.typescript.dir), fs.realpathSync(tsdk));
+		assert.equal(fs.realpathSync(relative.typescript?.dir ?? ''), fs.realpathSync(tsdk));
 	} finally {
 		process.chdir(previous);
 	}
@@ -269,24 +269,14 @@ test('on Windows nothing on PATH is probed or run through a shell', () => {
 	assert.throws(() => resolveServer({ projectDir: root, env: { PATH: binDir, PATHEXT: '.EXE;.CMD' }, platform: 'win32', globalRoots: [] }), ResolveError);
 });
 
-test('resolution reads package.json only for directories that look like a typescript package', () => {
+test('resolution reads package.json only for directories that look like a typescript package', context => {
 	const root = tempDir();
 	for (let i = 0; i < 200; i++) {
 		writeJson(path.join(root, 'node_modules', `pkg-${i}`, 'package.json'), { name: `pkg-${i}`, version: '1.0.0' });
 	}
 	writeFakeTypescript(path.join(root, 'node_modules', 'typescript'), '7.0.2');
-	const original = fs.readFileSync;
-	let reads = 0;
-	fs.readFileSync = function (file, ...rest) {
-		if (String(file).endsWith('package.json')) {
-			reads += 1;
-		}
-		return original.call(this, file, ...rest);
-	};
-	try {
-		assert.equal(resolveServer({ projectDir: root, ...hermetic }).typescript.version, '7.0.2');
-	} finally {
-		fs.readFileSync = original;
-	}
+	const readFile = context.mock.method(fs, 'readFileSync');
+	assert.equal(resolveServer({ projectDir: root, ...hermetic }).typescript?.version, '7.0.2');
+	const reads = readFile.mock.calls.filter(call => String(call.arguments[0]).endsWith('package.json')).length;
 	assert.ok(reads < 5, `read ${reads} package.json files`);
 });

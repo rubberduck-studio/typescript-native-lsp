@@ -31,6 +31,8 @@ jobs:
         with:
           node-version: 24
       - run: node -e "JSON.parse(require('fs').readFileSync('.lsp.json','utf8'))"
+      - run: npm ci
+      - run: npm run typecheck
       - run: npm install -g @anthropic-ai/claude-code
       - run: claude plugin validate --strict .claude-plugin/plugin.json
       - run: claude plugin validate --strict .claude-plugin/marketplace.json

@@ -1,7 +1,7 @@
 /**
  * Keeps the server's view of the client's open documents in line with disk.
  *
- * TODO(upstream): delete this file, its tests and its entry in launch.mjs once
+ * TODO(upstream): delete this file, its tests and its entry in main.mts once
  * Claude Code tells servers about files changed outside its own Edit and Write
  * tools: it sends no workspace/didChangeWatchedFiles (anthropics/claude-code#85225)
  * and no textDocument/didClose (anthropics/claude-code#93104), so files changed by
@@ -21,16 +21,29 @@
  */
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import type { TextDocumentContentChangeEvent } from 'vscode-languageserver-protocol';
+import { isMethod, methodMessage, type Feature, type Message, type MethodMessage, type ProxyContext } from './proxy.mts';
 
-export function documentSync(ctx) {
+interface TrackedDocument {
+	file: string;
+	languageId: string;
+	/** The content the server holds, or null when an incremental change made it unknown. */
+	text: string | null;
+	mtimeMs: number;
+	size: number;
+	/** The version the server last saw; the proxy's own numbering. */
+	version: number;
+	open: boolean;
+}
+
+export function documentSync(ctx: ProxyContext): Feature {
 	let enabled = true;
-	/** @type {Map<string, { file: string, languageId: string, text: string | null, mtimeMs: number, size: number, version: number, open: boolean }>} */
-	const documents = new Map();
+	const documents = new Map<string, TrackedDocument>();
 	ctx.log('document sync on; set TYPESCRIPT_NATIVE_LSP_DOCUMENT_SYNC=0 to run without it');
 
 	return {
 		onClient(message) {
-			if ('initialize' === message.method && undefined !== message.params?.capabilities?.workspace?.didChangeWatchedFiles) {
+			if (isMethod(message, 'initialize') && undefined !== message.params.capabilities.workspace?.didChangeWatchedFiles) {
 				enabled = false;
 				ctx.log('client watches files itself; document sync disabled');
 				return true;
@@ -38,16 +51,16 @@ export function documentSync(ctx) {
 			if (false === enabled) {
 				return true;
 			}
-			switch (message.method) {
-				case 'textDocument/didOpen':
-					return opened(message);
-				case 'textDocument/didChange':
-					return changed(message);
-				case 'textDocument/didClose':
-					return closed(message);
-				default:
-					return true;
+			if (isMethod(message, 'textDocument/didOpen')) {
+				return opened(message);
 			}
+			if (isMethod(message, 'textDocument/didChange')) {
+				return changed(message);
+			}
+			if (isMethod(message, 'textDocument/didClose')) {
+				return closed(message);
+			}
+			return true;
 		},
 		beforeRequest() {
 			if (false === enabled) {
@@ -59,19 +72,19 @@ export function documentSync(ctx) {
 		},
 	};
 
-	function opened(message) {
+	function opened(message: MethodMessage<'textDocument/didOpen'>): boolean | Message {
 		const { uri, languageId, text } = message.params.textDocument;
 		const file = filePathOf(uri);
 		if (null === file) {
 			return true;
 		}
-		const document = { file, languageId, text, mtimeMs: 0, size: 0, version: 1, open: true };
+		const document: TrackedDocument = { file, languageId, text, mtimeMs: 0, size: 0, version: 1, open: true };
 		recordStat(document);
 		documents.set(uri, document);
-		return withVersion(message, document.version);
+		return methodMessage('textDocument/didOpen', { textDocument: { ...message.params.textDocument, version: document.version } });
 	}
 
-	function changed(message) {
+	function changed(message: MethodMessage<'textDocument/didChange'>): boolean | Message {
 		const { uri } = message.params.textDocument;
 		const document = documents.get(uri);
 		if (undefined === document) {
@@ -82,29 +95,30 @@ export function documentSync(ctx) {
 		document.text = text;
 		recordStat(document);
 		if (document.open) {
-			return withVersion(message, document.version);
+			return methodMessage('textDocument/didChange', { ...message.params, textDocument: { uri, version: document.version } });
 		}
 		document.open = true;
 		ctx.trace(`reopen ${uri} on client change`);
-		return { jsonrpc: '2.0', method: 'textDocument/didOpen', params: { textDocument: { uri, languageId: document.languageId, version: document.version, text: text ?? readText(document.file) ?? '' } } };
+		return methodMessage('textDocument/didOpen', { textDocument: { uri, languageId: document.languageId, version: document.version, text: text ?? readText(document.file) ?? '' } });
 	}
 
-	function closed(message) {
-		const document = documents.get(message.params.textDocument.uri);
-		documents.delete(message.params.textDocument.uri);
+	function closed(message: MethodMessage<'textDocument/didClose'>): boolean {
+		const { uri } = message.params.textDocument;
+		const document = documents.get(uri);
+		documents.delete(uri);
 		return undefined === document || document.open;
 	}
 
-	function reconcile(uri, document) {
-		let stat;
+	function reconcile(uri: string, document: TrackedDocument): void {
+		let stat: fs.Stats;
 		try {
 			stat = fs.statSync(document.file);
 		} catch (error) {
-			if ('ENOENT' === error.code && document.open) {
+			if (isMissingFile(error) && document.open) {
 				document.open = false;
 				ctx.trace(`close ${uri}: gone from disk`);
-				ctx.toServer({ jsonrpc: '2.0', method: 'textDocument/didClose', params: { textDocument: { uri } } });
-				ctx.toClient({ jsonrpc: '2.0', method: 'textDocument/publishDiagnostics', params: { uri, diagnostics: [] } });
+				ctx.toServer(methodMessage('textDocument/didClose', { textDocument: { uri } }));
+				ctx.toClient(methodMessage('textDocument/publishDiagnostics', { uri, diagnostics: [] }));
 				ctx.emit('closed', uri);
 			}
 			return;
@@ -125,28 +139,23 @@ export function documentSync(ctx) {
 		document.version += 1;
 		if (document.open) {
 			ctx.trace(`update ${uri} from disk`);
-			ctx.toServer({ jsonrpc: '2.0', method: 'textDocument/didChange', params: { textDocument: { uri, version: document.version }, contentChanges: [{ text }] } });
+			ctx.toServer(methodMessage('textDocument/didChange', { textDocument: { uri, version: document.version }, contentChanges: [{ text }] }));
 		} else {
 			document.open = true;
 			ctx.trace(`reopen ${uri}: back on disk`);
-			ctx.toServer({ jsonrpc: '2.0', method: 'textDocument/didOpen', params: { textDocument: { uri, languageId: document.languageId, version: document.version, text } } });
+			ctx.toServer(methodMessage('textDocument/didOpen', { textDocument: { uri, languageId: document.languageId, version: document.version, text } }));
 		}
 		ctx.emit('changed', uri);
 	}
 }
 
-function withVersion(message, version) {
-	const { textDocument } = message.params;
-	return { ...message, params: { ...message.params, textDocument: { ...textDocument, version } } };
-}
-
 /** The document's new content when the change replaces it entirely, as Claude Code's always do; null for incremental edits. */
-function fullText(contentChanges) {
+function fullText(contentChanges: TextDocumentContentChangeEvent[]): string | null {
 	const last = contentChanges.at(-1);
-	return undefined !== last && undefined === last.range ? last.text : null;
+	return undefined !== last && false === 'range' in last ? last.text : null;
 }
 
-function recordStat(document) {
+function recordStat(document: TrackedDocument): void {
 	try {
 		const stat = fs.statSync(document.file);
 		document.mtimeMs = stat.mtimeMs;
@@ -157,7 +166,7 @@ function recordStat(document) {
 	}
 }
 
-function readText(file) {
+function readText(file: string): string | null {
 	try {
 		return fs.readFileSync(file, 'utf8');
 	} catch {
@@ -165,10 +174,14 @@ function readText(file) {
 	}
 }
 
-function filePathOf(uri) {
+function filePathOf(uri: string): string | null {
 	try {
 		return fileURLToPath(uri);
 	} catch {
 		return null;
 	}
+}
+
+function isMissingFile(error: unknown): boolean {
+	return error instanceof Error && 'code' in error && 'ENOENT' === error.code;
 }
