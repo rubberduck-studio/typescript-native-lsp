@@ -116,3 +116,27 @@ for (const name of ['ts7', 'ts6']) {
 function isInitializeResult(value: unknown): value is InitializeResult {
 	return 'object' === typeof value && null !== value && 'capabilities' in value && 'object' === typeof value.capabilities;
 }
+
+test('a Node that cannot strip types gets an explanation on stderr instead of a syntax error', () => {
+	const result = spawnSync(process.execPath, ['--no-experimental-strip-types', launcher, '--resolve'], { cwd: fixture('ts7'), env: envFor(fixture('ts7')), encoding: 'utf8' });
+	assert.equal(result.status, 1);
+	assert.equal(result.stdout, '');
+	assert.match(result.stderr, /cannot strip TypeScript types/);
+	assert.doesNotMatch(result.stderr, /SyntaxError/);
+});
+
+for (const [name, env, expected] of [
+	['ts7', {}, ['document-sync', 'diagnostics-bridge']],
+	['ts6', {}, ['document-sync']],
+	['ts7', { TYPESCRIPT_NATIVE_LSP_DIAGNOSTICS: '0' }, ['document-sync']],
+	['ts7', { TYPESCRIPT_NATIVE_LSP_DOCUMENT_SYNC: '0' }, ['diagnostics-bridge']],
+	['ts6', { TYPESCRIPT_NATIVE_LSP_DOCUMENT_SYNC: '0' }, []],
+] satisfies Array<[string, NodeJS.ProcessEnv, string[]]>) {
+	test(`${name} with ${JSON.stringify(env)} runs the proxy features ${JSON.stringify(expected)}`, { skip: false === installed(name) && 'run npm run fixtures' }, () => {
+		const result = spawnSync(process.execPath, [launcher, '--resolve'], { cwd: fixture(name), env: { ...envFor(fixture(name)), ...env }, encoding: 'utf8' });
+		assert.equal(result.status, 0, result.stderr);
+		const parsed: unknown = JSON.parse(result.stdout);
+		assert.ok('object' === typeof parsed && null !== parsed && 'proxyFeatures' in parsed, result.stdout);
+		assert.deepEqual(parsed.proxyFeatures, expected);
+	});
+}

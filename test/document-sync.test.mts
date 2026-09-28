@@ -11,7 +11,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Hover, Location, LocationLink } from 'vscode-languageserver-protocol';
-import { startSession, uriOf, diagnosticsFor, type Session } from './helpers/lsp-session.mts';
+import { startSession, uriOf, diagnosticsFor, claudeCodeClient, type Session } from './helpers/lsp-session.mts';
 
 const fixtures = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures');
 const tempDirs: string[] = [];
@@ -159,3 +159,36 @@ for (const engine of ['ts7', 'ts6']) {
 		}
 	});
 }
+
+for (const engine of ['ts7', 'ts6']) {
+	const skip = false === fs.existsSync(path.join(fixtures, engine, 'node_modules')) && 'run npm run fixtures';
+
+	test(`${engine}: a file that returns to disk after it was deleted is served again without a client edit`, { skip }, async () => {
+		const root = project(engine, { 'a.ts': 'export const a = 1;\n' });
+		const session = startSession(root);
+		try {
+			await session.initialize();
+			session.openFile(src(root, 'a.ts'));
+			assert.match(await hoverText(session, src(root, 'a.ts'), 0, 14), /a: 1/);
+			fs.rmSync(src(root, 'a.ts'));
+			await settle();
+			await hoverText(session, src(root, 'a.ts'), 0, 14);
+			write(root, 'a.ts', 'export const a = 8;\n');
+			await settle();
+			assert.match(await hoverText(session, src(root, 'a.ts'), 0, 14), /a: 8/);
+		} finally {
+			await session.close();
+		}
+	});
+}
+
+test('a client that watches files itself switches document sync off', { skip: false === fs.existsSync(path.join(fixtures, 'ts7', 'node_modules')) && 'run npm run fixtures' }, async () => {
+	const root = project('ts7', { 'other.ts': 'export const other = 2;\n' });
+	const session = startSession(root, { capabilities: { ...claudeCodeClient.capabilities, workspace: { ...claudeCodeClient.capabilities.workspace, didChangeWatchedFiles: { dynamicRegistration: false } } } });
+	try {
+		await session.initialize();
+		assert.match(session.stderr, /document sync disabled/);
+	} finally {
+		await session.close();
+	}
+});
