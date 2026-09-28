@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.1.2
 
 - The plugin is now written in TypeScript that Node runs directly by stripping the types, with no build step, and type-checked in CI. It needs Node 22.18 or newer; on an older Node, or with type stripping disabled, the launcher says so instead of failing with a syntax error.
 
