@@ -268,3 +268,25 @@ test('on Windows nothing on PATH is probed or run through a shell', () => {
 	fs.writeFileSync(path.join(binDir, 'tsc.cmd'), '@echo Version 7.0.2\r\n');
 	assert.throws(() => resolveServer({ projectDir: root, env: { PATH: binDir, PATHEXT: '.EXE;.CMD' }, platform: 'win32', globalRoots: [] }), ResolveError);
 });
+
+test('resolution reads package.json only for directories that look like a typescript package', () => {
+	const root = tempDir();
+	for (let i = 0; i < 200; i++) {
+		writeJson(path.join(root, 'node_modules', `pkg-${i}`, 'package.json'), { name: `pkg-${i}`, version: '1.0.0' });
+	}
+	writeFakeTypescript(path.join(root, 'node_modules', 'typescript'), '7.0.2');
+	const original = fs.readFileSync;
+	let reads = 0;
+	fs.readFileSync = function (file, ...rest) {
+		if (String(file).endsWith('package.json')) {
+			reads += 1;
+		}
+		return original.call(this, file, ...rest);
+	};
+	try {
+		assert.equal(resolveServer({ projectDir: root, ...hermetic }).typescript.version, '7.0.2');
+	} finally {
+		fs.readFileSync = original;
+	}
+	assert.ok(reads < 5, `read ${reads} package.json files`);
+});

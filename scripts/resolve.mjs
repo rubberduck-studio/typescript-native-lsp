@@ -120,13 +120,18 @@ function findProjectTypescript(start, rootDir) {
 /**
  * The highest-versioned typescript package installed directly under a directory's
  * node_modules, found by the name in each package's own package.json so that
- * aliased installs count whatever directory they live in.
+ * aliased installs count whatever directory they live in. Every typescript
+ * package ships lib/tsc.js, so only directories that have one are read, which
+ * keeps a large node_modules to a directory listing and a few file checks.
  */
 function bestTypescriptIn(dir) {
 	const nodeModules = path.join(dir, 'node_modules');
 	let best = null;
 	for (const entry of listEntries(nodeModules)) {
 		const pkgDir = path.join(nodeModules, entry);
+		if (false === fs.existsSync(path.join(pkgDir, 'lib', 'tsc.js'))) {
+			continue;
+		}
 		const pkg = readPackage(pkgDir);
 		if (null === pkg || 'typescript' !== pkg.name) {
 			continue;
