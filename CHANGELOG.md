@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.1.0
+
+- Keeps the server in line with disk for files changed outside Claude Code. Claude Code only reports its own edits and never closes documents, so after shell commands, git, formatters or codegen, answers came from stale file contents, and renamed or deleted files lingered in the program with false diagnostics against them. Before every request the proxy now sends changed files' current content, closes deleted ones and reopens restored ones, for TypeScript 7 and for TypeScript 6 and older. `TYPESCRIPT_NATIVE_LSP_DOCUMENT_SYNC=0` disables it.
+- The launcher now proxies TypeScript 6 and older too, since document sync applies to every server.
+
 ## 1.0.0
 
 Initial release.
