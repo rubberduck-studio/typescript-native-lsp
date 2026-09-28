@@ -17,7 +17,7 @@ const noNode = path.join(os.tmpdir(), 'nowhere', 'bin', 'node');
 const tempDirs = [];
 after(() => {
 	for (const dir of tempDirs) {
-		fs.rmSync(dir, { recursive: true, force: true });
+		fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
 	}
 });
 

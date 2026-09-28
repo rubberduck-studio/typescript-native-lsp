@@ -174,9 +174,12 @@ export function startSession(projectDir, { env = {}, capabilities = claudeCodeCl
 				child.once('exit', (code, signal) => resolve({ code, signal }));
 			});
 		},
-		close() {
+		/** Ends the session the way a client does: close stdin, give the launcher time to exit with its server, kill only if it does not. */
+		async close() {
 			child.stdin.end();
-			child.kill();
+			const timer = setTimeout(() => child.kill(), 3000);
+			await session.exited();
+			clearTimeout(timer);
 		},
 	};
 	return session;

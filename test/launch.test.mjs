@@ -37,7 +37,7 @@ async function initialize(projectDir) {
 		const message = await session.initialize();
 		return { message, stderr: session.stderr };
 	} finally {
-		session.close();
+		await session.close();
 	}
 }
 

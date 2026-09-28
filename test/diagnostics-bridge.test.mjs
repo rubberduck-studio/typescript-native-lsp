@@ -19,7 +19,7 @@ const skip = false === fs.existsSync(path.join(ts7, 'node_modules')) && 'run npm
 const tempDirs = [];
 after(() => {
 	for (const dir of tempDirs) {
-		fs.rmSync(dir, { recursive: true, force: true });
+		fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
 	}
 });
 
@@ -49,7 +49,7 @@ test('TYPESCRIPT_NATIVE_LSP_DIAGNOSTICS=0 runs the native server without pushed 
 		assert.match(session.stderr, /launching/);
 		assert.doesNotMatch(session.stderr, /diagnostics bridge on/);
 	} finally {
-		session.close();
+		await session.close();
 	}
 });
 
@@ -62,7 +62,7 @@ test('a client that advertises pull diagnostics switches the bridge off', { skip
 		assert.equal(await session.receivesNotification(diagnosticsFor(file)), false);
 		assert.match(session.stderr, /bridge disabled/);
 	} finally {
-		session.close();
+		await session.close();
 	}
 });
 
@@ -75,7 +75,7 @@ test('the bridge never forwards its own pull responses to the client', { skip },
 		await session.waitForNotification(diagnosticsFor(file));
 		assert.deepEqual(session.unexpectedResponses, []);
 	} finally {
-		session.close();
+		await session.close();
 	}
 });
 
@@ -92,7 +92,7 @@ test('a burst of edits publishes for the final version only', { skip }, async ()
 		assert.equal(published.params.version, 6);
 		assert.equal(await session.receivesNotification(message => diagnosticsFor(file)(message) && 6 !== message.params.version, { withinMs: 1000 }), false);
 	} finally {
-		session.close();
+		await session.close();
 	}
 });
 
@@ -105,7 +105,7 @@ test('an empty first pull is retried once and the retry is published', async () 
 		const published = await session.waitForNotification(message => diagnosticsFor(file)(message) && message.params.diagnostics.length > 0);
 		assert.equal(published.params.diagnostics[0].message, 'pull 2');
 	} finally {
-		session.close();
+		await session.close();
 	}
 });
 
@@ -118,7 +118,7 @@ test('a failed pull is retried once', async () => {
 		const published = await session.waitForNotification(diagnosticsFor(file));
 		assert.equal(published.params.diagnostics[0].message, 'pull 2');
 	} finally {
-		session.close();
+		await session.close();
 	}
 });
 
@@ -131,7 +131,7 @@ test('a pull that keeps failing is not retried forever', async () => {
 		assert.equal(await session.receivesNotification(diagnosticsFor(file), { withinMs: 1500 }), false);
 		assert.equal((session.stderr.match(/pull failed/g) ?? []).length, 2);
 	} finally {
-		session.close();
+		await session.close();
 	}
 });
 
@@ -145,6 +145,6 @@ test('related documents in a pull result are published too', async () => {
 		assert.equal(related.params.diagnostics[0].code, 2304);
 		assert.equal(related.params.version, undefined);
 	} finally {
-		session.close();
+		await session.close();
 	}
 });

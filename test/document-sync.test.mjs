@@ -16,7 +16,7 @@ const fixtures = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtur
 const tempDirs = [];
 after(() => {
 	for (const dir of tempDirs) {
-		fs.rmSync(dir, { recursive: true, force: true });
+		fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
 	}
 });
 
@@ -73,7 +73,7 @@ for (const engine of ['ts7', 'ts6']) {
 			await settle();
 			assert.match(await hoverText(session, src(root, 'other.ts'), 0, 14), /other: 5/);
 		} finally {
-			session.close();
+			await session.close();
 		}
 	});
 
@@ -92,7 +92,7 @@ for (const engine of ['ts7', 'ts6']) {
 			const targets = await definitionFiles(session, b, 0, 10);
 			assert.ok(false === targets.some(target => target.endsWith(`${path.sep}a.ts`)), `definition points into the deleted file: ${targets.join(', ')}`);
 		} finally {
-			session.close();
+			await session.close();
 		}
 	});
 
@@ -111,7 +111,7 @@ for (const engine of ['ts7', 'ts6']) {
 			session.changeFile(src(root, 'a.ts'), 2, text);
 			assert.match(await hoverText(session, src(root, 'a.ts'), 0, 14), /a: 7/);
 		} finally {
-			session.close();
+			await session.close();
 		}
 	});
 }
@@ -143,7 +143,7 @@ for (const engine of ['ts7', 'ts6']) {
 			assert.ok(null !== published && null !== last, 'no diagnostics published for main.ts');
 			assert.deepEqual(last.params.diagnostics.map(d => d.code), [], JSON.stringify(last.params.diagnostics.map(d => d.message)));
 		} finally {
-			session.close();
+			await session.close();
 		}
 	});
 }

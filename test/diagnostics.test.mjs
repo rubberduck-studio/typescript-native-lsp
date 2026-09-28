@@ -35,7 +35,7 @@ for (const name of ['ts7', 'ts6']) {
 			const published = await session.waitForNotification(message => diagnosticsFor(file)(message) && hasCode(2322)(message));
 			assert.equal(published.params.diagnostics.find(d => 2322 === d.code).severity, 1);
 		} finally {
-			session.close();
+			await session.close();
 		}
 	});
 
@@ -51,7 +51,7 @@ for (const name of ['ts7', 'ts6']) {
 			const cleared = await session.waitForNotification(message => session.notifications.indexOf(message) >= before && diagnosticsFor(file)(message) && 0 === message.params.diagnostics.length);
 			assert.deepEqual(cleared.params.diagnostics, []);
 		} finally {
-			session.close();
+			await session.close();
 		}
 	});
 }
