@@ -10,7 +10,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { startSession, diagnosticsFor, claudeCodeClient, type Diagnostics } from './helpers/lsp-session.mts';
+import { startSession, diagnosticsFor, claudeCodeClient, uriOf, type Diagnostics } from './helpers/lsp-session.mts';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const ts7 = path.join(here, 'fixtures', 'ts7');
@@ -53,14 +53,31 @@ test('TYPESCRIPT_NATIVE_LSP_DIAGNOSTICS=0 runs the native server without pushed 
 	}
 });
 
-test('a client that advertises pull diagnostics switches the bridge off', { skip }, async () => {
+test('a client that only advertises pull diagnostics still gets them pushed', { skip }, async () => {
 	const file = path.join(ts7, 'error.ts');
 	const session = startSession(ts7, { capabilities: { ...claudeCodeClient.capabilities, textDocument: { ...claudeCodeClient.capabilities.textDocument, diagnostic: { dynamicRegistration: false } } } });
 	try {
 		await session.initialize();
 		session.openFile(file);
-		assert.equal(await session.receivesNotification(diagnosticsFor(file)), false);
+		assert.equal(await session.receivesNotification(diagnosticsFor(file)), true);
+		assert.doesNotMatch(session.stderr, /bridge disabled/);
+	} finally {
+		await session.close();
+	}
+});
+
+test('a client that requests diagnostics itself switches the bridge off', { skip }, async () => {
+	const file = path.join(ts7, 'error.ts');
+	const session = startSession(ts7);
+	try {
+		await session.initialize();
+		session.openFile(file);
+		const pulled = await session.request('textDocument/diagnostic', { textDocument: { uri: uriOf(file) } });
+		assert.equal(pulled.error, undefined, JSON.stringify(pulled));
 		assert.match(session.stderr, /bridge disabled/);
+		const before = session.notifications.length;
+		session.changeFile(file, 2, 'export const wrong: string = 1;\n');
+		assert.equal(await session.receivesNotification(message => session.notifications.indexOf(message) >= before && diagnosticsFor(file)(message)), false);
 	} finally {
 		await session.close();
 	}

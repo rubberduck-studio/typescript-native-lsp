@@ -5,7 +5,10 @@
  * and its entry in main.mts once either side closes the gap: TypeScript pushing
  * per-file diagnostics for clients without pull support (microsoft/TypeScript#63921),
  * or Claude Code requesting diagnostics itself (anthropics/claude-code#40282). The
- * feature switches itself off when the client advertises pull support.
+ * feature switches itself off once the client sends a textDocument/diagnostic
+ * request of its own. It deliberately ignores what the client advertises: a
+ * client that claims pull support without pulling would otherwise lose all
+ * diagnostics silently, which is worse than briefly receiving them twice.
  *
  * The native server serves per-file diagnostics only on request
  * (textDocument/diagnostic). Claude Code only listens for pushed ones
@@ -59,9 +62,12 @@ export function diagnosticsBridge(ctx: ProxyContext): Feature {
 
 	return {
 		onClient(message) {
-			if (isMethod(message, 'initialize') && undefined !== message.params.capabilities.textDocument?.diagnostic) {
+			if (enabled && isMethod(message, 'textDocument/diagnostic')) {
 				enabled = false;
-				ctx.log('client supports pull diagnostics; bridge disabled');
+				ctx.log('client requests diagnostics itself; bridge disabled');
+				for (const uri of [...documents.keys()]) {
+					forget(uri);
+				}
 			}
 			if (false === enabled) {
 				return true;
