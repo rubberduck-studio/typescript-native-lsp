@@ -1,6 +1,6 @@
 {
   "name": "typescript-native-lsp",
-  "version": "1.1.2",
+  "version": "1.1.3",
   "private": true,
   "description": "Claude Code plugin: TypeScript 7 native language server with TypeScript 6 fallback",
   "type": "module",

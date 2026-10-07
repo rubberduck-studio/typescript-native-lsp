@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.3
+
+- Fixes stale answers and ghost files returning on Claude Code 2.1.288 and newer. Those versions advertise file watching without ever sending file-change events, and document sync took the advertisement as a sign the client now handled changes and switched itself off. It now stays on regardless of what the client advertises; when disk and server agree it sends nothing.
+- The diagnostics bridge likewise switches off only when the client actually requests diagnostics itself, not when it merely advertises pull support, so a client that claims support without using it keeps receiving diagnostics.
+- Tests replay the initialize payload of Claude Code 2.1.292; CI covers Node 26 and uses current GitHub Actions.
+
 ## 1.1.2
 
 - The plugin is now written in TypeScript that Node runs directly by stripping the types, with no build step, and type-checked in CI. It needs Node 22.18 or newer; on an older Node, or with type stripping disabled, the launcher says so instead of failing with a syntax error.
