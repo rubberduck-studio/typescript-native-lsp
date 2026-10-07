@@ -1,14 +1,17 @@
 {
-  "//": "initialize parameters Claude Code sends to a plugin LSP server, captured from Claude Code 2.1.281 on 2026-09-24 with a recording server; see CONTRIBUTING.md to refresh",
+  "//": "initialize parameters Claude Code sends to a plugin LSP server, captured from Claude Code 2.1.292 on 2026-10-07 with a recording server; see CONTRIBUTING.md to refresh",
   "clientInfo": {
     "name": "Claude Code",
-    "version": "2.1.281"
+    "version": "2.1.292"
   },
   "initializationOptions": {},
   "capabilities": {
     "workspace": {
       "configuration": false,
-      "workspaceFolders": false
+      "workspaceFolders": false,
+      "didChangeWatchedFiles": {
+        "dynamicRegistration": false
+      }
     },
     "textDocument": {
       "synchronization": {

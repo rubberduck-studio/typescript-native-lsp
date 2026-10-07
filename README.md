@@ -81,7 +81,7 @@ Claude Code tells the language server only about files its own Edit and Write to
 
 Claude Code has no unsaved buffers, so disk is always the truth. Before every request the proxy compares each document Claude has opened with its file: a changed file is sent to the server with its current content, a deleted file is closed and its diagnostics cleared, and a file that reappears is opened again. Checking costs a file-status call per open document, well under a millisecond per request. It works the same for TypeScript 7 and TypeScript 6 and older.
 
-This is an interim measure too. It switches itself off when the client advertises file watching, and it will be removed once Claude Code sends file-change and close notifications itself ([anthropics/claude-code#85225](https://github.com/anthropics/claude-code/issues/85225), [anthropics/claude-code#93104](https://github.com/anthropics/claude-code/issues/93104)). Set `TYPESCRIPT_NATIVE_LSP_DOCUMENT_SYNC=0` to run without it.
+This is an interim measure too, and it will be removed once Claude Code itself sends the new content of open files that change on disk, or closes them ([anthropics/claude-code#76870](https://github.com/anthropics/claude-code/issues/76870), [anthropics/claude-code#93104](https://github.com/anthropics/claude-code/issues/93104)). It stays on regardless of what the client advertises: since 2.1.288 Claude Code advertises file watching but never sends file-change events, and such events would not refresh open documents anyway, because servers treat an open document as the client's. When disk and server agree it sends nothing. Set `TYPESCRIPT_NATIVE_LSP_DOCUMENT_SYNC=0` to run without it.
 
 ## Diagnostics
 

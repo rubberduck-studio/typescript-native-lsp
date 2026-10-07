@@ -182,12 +182,17 @@ for (const engine of ['ts7', 'ts6']) {
 	});
 }
 
-test('a client that watches files itself switches document sync off', { skip: false === fs.existsSync(path.join(fixtures, 'ts7', 'node_modules')) && 'run npm run fixtures' }, async () => {
+/** Claude Code 2.1.288 began advertising file watching without ever sending events; advertised capabilities must not switch document sync off. */
+test('a client that advertises file watching, even with dynamic registration, still gets open documents synced from disk', { skip: false === fs.existsSync(path.join(fixtures, 'ts7', 'node_modules')) && 'run npm run fixtures' }, async () => {
 	const root = project('ts7', { 'other.ts': 'export const other = 2;\n' });
-	const session = startSession(root, { capabilities: { ...claudeCodeClient.capabilities, workspace: { ...claudeCodeClient.capabilities.workspace, didChangeWatchedFiles: { dynamicRegistration: false } } } });
+	const session = startSession(root, { capabilities: { ...claudeCodeClient.capabilities, workspace: { ...claudeCodeClient.capabilities.workspace, didChangeWatchedFiles: { dynamicRegistration: true } } } });
 	try {
 		await session.initialize();
-		assert.match(session.stderr, /document sync disabled/);
+		session.openFile(src(root, 'other.ts'));
+		assert.match(await hoverText(session, src(root, 'other.ts'), 0, 14), /other: 2/);
+		write(root, 'other.ts', 'export const other = 5;\n');
+		await settle();
+		assert.match(await hoverText(session, src(root, 'other.ts'), 0, 14), /other: 5/);
 	} finally {
 		await session.close();
 	}

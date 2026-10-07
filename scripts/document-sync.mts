@@ -2,12 +2,17 @@
  * Keeps the server's view of the client's open documents in line with disk.
  *
  * TODO(upstream): delete this file, its tests and its entry in main.mts once
- * Claude Code tells servers about files changed outside its own Edit and Write
- * tools: it sends no workspace/didChangeWatchedFiles (anthropics/claude-code#85225)
- * and no textDocument/didClose (anthropics/claude-code#93104), so files changed by
- * shell commands, git, formatters or codegen stay stale for the whole session
- * (anthropics/claude-code#76870). The feature switches itself off when the client
- * advertises file watching.
+ * Claude Code itself sends the new content of open documents whose files change
+ * on disk, or closes them. Today it sends nothing for files changed outside its
+ * own Edit and Write tools (anthropics/claude-code#76870, #85225) and closes
+ * documents only when evicting beyond 50 (anthropics/claude-code#93104), so files
+ * changed by shell commands, git, formatters or codegen stay stale.
+ *
+ * It does not switch itself off on what the client advertises. Claude Code has
+ * advertised workspace.didChangeWatchedFiles since 2.1.288 without ever sending
+ * it, and file-change events would not help anyway: servers treat an open
+ * document as the client's and never re-read it from disk. When disk and server
+ * agree this feature sends nothing, so leaving it on costs nothing.
  *
  * Servers treat an open document as authoritative over disk. Claude Code opens a
  * document the first time it edits or queries a file and never closes it, so
@@ -37,20 +42,11 @@ interface TrackedDocument {
 }
 
 export function documentSync(ctx: ProxyContext): Feature {
-	let enabled = true;
 	const documents = new Map<string, TrackedDocument>();
 	ctx.log('document sync on; set TYPESCRIPT_NATIVE_LSP_DOCUMENT_SYNC=0 to run without it');
 
 	return {
 		onClient(message) {
-			if (isMethod(message, 'initialize') && undefined !== message.params.capabilities.workspace?.didChangeWatchedFiles) {
-				enabled = false;
-				ctx.log('client watches files itself; document sync disabled');
-				return true;
-			}
-			if (false === enabled) {
-				return true;
-			}
 			if (isMethod(message, 'textDocument/didOpen')) {
 				return opened(message);
 			}
@@ -63,9 +59,6 @@ export function documentSync(ctx: ProxyContext): Feature {
 			return true;
 		},
 		beforeRequest() {
-			if (false === enabled) {
-				return;
-			}
 			for (const [uri, document] of documents) {
 				reconcile(uri, document);
 			}
