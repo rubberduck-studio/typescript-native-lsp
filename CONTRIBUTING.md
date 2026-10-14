@@ -26,7 +26,9 @@ claude --plugin-dir /path/to/typescript-native-lsp --settings '{"enabledPlugins"
 
 `claude --debug` shows the launcher's `[typescript-native-lsp]` lines when the server starts. `node scripts/launch.mjs --resolve` from inside a project prints what the launcher would start and why.
 
-CI runs the same tests on Linux, macOS and Windows with Node 22 and 24, and validates both manifests.
+CI runs the same tests on Linux, macOS and Windows with Node 22, 24 and 26, and validates both manifests. Every Monday it also runs them with the TypeScript 7 fixture on `typescript@next`; a failure there is advance notice of a change in the native server, not a broken build.
+
+Dependabot keeps the actions, the dev dependencies and the `ts7` and `ts6` fixtures current, staying within each fixture's TypeScript major. It skips `npm:` aliases, so the `aliased` fixture is bumped by hand.
 
 ## Where things live
 
