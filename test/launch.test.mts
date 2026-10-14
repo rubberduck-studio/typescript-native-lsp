@@ -69,7 +69,7 @@ test('TypeScript 7 project completes the initialize handshake with the native se
 	assert.match(result.serverInfo?.version ?? '', /^7\./);
 	assert.equal(result.capabilities.hoverProvider, true);
 	assert.equal(result.capabilities.callHierarchyProvider, true);
-	assert.match(stderr, /TypeScript 7\.0\.2 via node_modules\/typescript/);
+	assert.match(stderr, /TypeScript 7\.\S+ via node_modules\/typescript/);
 });
 
 test('aliased project completes the initialize handshake with the native server', { skip: false === installed('aliased') && 'run npm run fixtures' }, async () => {

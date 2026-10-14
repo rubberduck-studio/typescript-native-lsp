@@ -29,6 +29,11 @@ function installed(name: string): boolean {
 	return fs.existsSync(path.join(fixture(name), 'node_modules'));
 }
 
+/** The version npm installed in a fixture, so assertions follow the fixture's pin. */
+function installedVersion(name: string, packageDir = 'typescript'): string {
+	return JSON.parse(fs.readFileSync(path.join(fixture(name), 'node_modules', packageDir, 'package.json'), 'utf8')).version;
+}
+
 function tempDir(): string {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'typescript-native-lsp-'));
 	tempDirs.push(dir);
@@ -70,7 +75,7 @@ test('TypeScript 7 project resolves to the native platform binary', { skip: fals
 	assert.ok(plan.command.endsWith(path.join('@typescript', `typescript-${platform}-${process.arch}`, nativeBinary)), plan.command);
 	assert.deepEqual(plan.args, ['--lsp', '--stdio']);
 	assert.equal(plan.native, true);
-	assert.equal(plan.typescript?.version, '7.0.2');
+	assert.equal(plan.typescript?.version, installedVersion('ts7'));
 	assert.match(plan.reason, /via node_modules\/typescript/);
 });
 
@@ -80,21 +85,21 @@ test('TypeScript 6 project resolves to the project-local typescript-language-ser
 	assert.ok(plan.args[0]?.endsWith(path.join('typescript-language-server', 'lib', 'cli.mjs')), plan.args[0]);
 	assert.equal(plan.args[1], '--stdio');
 	assert.equal(plan.native, false);
-	assert.equal(plan.typescript?.version, '6.0.3');
+	assert.equal(plan.typescript?.version, installedVersion('ts6'));
 	assert.ok(plan.reason.endsWith('which will use ' + path.join(fixture('ts6'), 'node_modules', 'typescript')), plan.reason);
 });
 
 test('aliased install picks the TypeScript 7 alias over the TypeScript 6 package named typescript', { skip: false === installed('aliased') && 'run npm run fixtures' }, () => {
 	const plan = resolveServer({ projectDir: fixture('aliased'), ...hermetic });
 	assert.ok(plan.command.endsWith(nativeBinary), plan.command);
-	assert.equal(plan.typescript?.version, '7.0.2');
+	assert.equal(plan.typescript?.version, installedVersion('aliased', path.join('@typescript', 'native')));
 	assert.ok(plan.typescript?.dir.endsWith(path.join('@typescript', 'native')), plan.typescript?.dir);
 	assert.match(plan.reason, /alias of typescript/);
 });
 
 test('nested directory walks up to the project TypeScript', { skip: false === installed('ts7') && 'run npm run fixtures' }, () => {
 	const plan = resolveServer({ projectDir: path.join(fixture('ts7'), 'src', 'deep'), ...hermetic });
-	assert.equal(plan.typescript?.version, '7.0.2');
+	assert.equal(plan.typescript?.version, installedVersion('ts7'));
 });
 
 test('an aliased typescript is found by its package name, wherever it was hoisted', () => {
