@@ -1,0 +1,33 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: ci
+
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: chore
+    ignore:
+      # Type definitions follow the Node floor in package.json engines.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
+
+  # The aliased fixture is left out: Dependabot skips npm: aliases in version updates.
+  - package-ecosystem: npm
+    directories:
+      - /test/fixtures/ts7
+      - /test/fixtures/ts6
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: test
+    ignore:
+      # Each fixture stands for one TypeScript major; a new major gets its own fixture.
+      - dependency-name: typescript
+        update-types: ["version-update:semver-major"]
