@@ -1,0 +1,25 @@
+name: typescript-next
+
+# Runs the tests against the latest TypeScript nightly, to see changes to the native server before they are released.
+on:
+  schedule:
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - run: npm run fixtures
+      - run: npm install --prefix test/fixtures/ts7 --no-save typescript@next
+      - run: node -p "'typescript ' + require('./test/fixtures/ts7/node_modules/typescript/package.json').version"
+      - run: npm test
