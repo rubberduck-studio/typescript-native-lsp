@@ -111,7 +111,9 @@ export function runProxy({ server: first, resolveServer, log, debug = false, idl
 
 	const fromClient = createFrameReader((frame, parse) => {
 		const message = parse();
-		if (undefined !== message.id && undefined !== message.method) {
+		// Features bring the server up to date before a request; a shutdown needs none, and their
+		// updates would start a server that idle shutdown has stopped, only for it to be stopped again.
+		if (undefined !== message.id && undefined !== message.method && 'shutdown' !== message.method) {
 			ctx.beforeRequest();
 		}
 		let current = message;
