@@ -44,6 +44,10 @@ Dependabot keeps the actions, the dev dependencies and the `ts7` and `ts6` fixtu
 - `test/fixtures/claude-code-client.json` is what Claude Code sends in `initialize`, so session tests behave like the real client. To refresh it after a Claude Code release, point a throwaway plugin's `.lsp.json` at a script that appends every incoming message to a file and answers `initialize` with empty capabilities, run `claude -p` with `--plugin-dir` on any TypeScript file, and copy the captured `clientInfo`, `initializationOptions` and `capabilities`.
 - The README's "How it works" section is the specification for the resolution order. Change both together.
 
+## Releasing
+
+Changes note themselves in `CHANGELOG.md` under `## Unreleased` as they land. To release, run `npm version major|minor|patch` on a clean `main`: its `version` hook (`tools/release-version.mts`) writes the new version into `.claude-plugin/plugin.json` and turns the `Unreleased` heading into the version, and npm commits everything as `chore: release <version>` and tags it `v<version>`. With nothing under `Unreleased` the hook fails and nothing is committed; `git checkout package.json package-lock.json` undoes npm's own bump. Then push the commit and the tag, and create the GitHub release with the version as its title and its changelog section as its body. Claude Code updates installed copies only when the version in `plugin.json` changes.
+
 ## Pull requests
 
 Using AI tools to prepare a change is fine, and expected for a plugin like this. Say so in the pull request description, and be able to explain every part of the change yourself. Keep the README's Limitations section honest: if a change fixes or introduces a known limit, update it.
