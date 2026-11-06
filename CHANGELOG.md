@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2.0.0
 
 - Stops the server after 10 minutes without activity from Claude Code and starts it again, with the same open files, when Claude next needs it. Claude Code keeps language servers running until the session ends, and TypeScript's servers hold on to every project they loaded, several GB per session on a large repository. The first request after a stop is a cold start, about a second on a 4,700-file repository.
 - **Breaking:** the plugin's settings are now plugin options, set in `/config`: `idle_shutdown_seconds` (0 turns idle shutdown off), `document_sync` and `diagnostics_bridge`. Claude Code passes them to the launcher and they override the shell, so `TYPESCRIPT_NATIVE_LSP_DOCUMENT_SYNC=0` and `TYPESCRIPT_NATIVE_LSP_DIAGNOSTICS=0` set in the shell no longer have an effect; turn the features off with the options instead. `TYPESCRIPT_NATIVE_LSP_TSDK` and `TYPESCRIPT_NATIVE_LSP_DEBUG` stay environment variables.
