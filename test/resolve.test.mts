@@ -286,8 +286,11 @@ test('resolution reads package.json only for directories that look like a typesc
 	assert.ok(reads < 5, `read ${reads} package.json files`);
 });
 
+/** This machine's tsrs platform package, as npm installs it: on Linux the glibc build, which CI runners use. */
+const hostTsrsPackage = 'linux' === platform ? `linux-${process.arch}-gnu` : `${platform}-${process.arch}`;
+
 /** A fake `tsrs` package and, unless `binary` is false, the platform package holding its binary, under a node_modules. */
-function writeFakeTsrs(nodeModules: string, { version = '0.22.0-ts7.1.0-beta', platformPackage = `${platform}-${process.arch}`, binary = true }: { version?: string; platformPackage?: string; binary?: boolean } = {}): string {
+function writeFakeTsrs(nodeModules: string, { version = '0.22.0-ts7.1.0-beta', platformPackage = hostTsrsPackage, binary = true }: { version?: string; platformPackage?: string; binary?: boolean } = {}): string {
 	writeJson(path.join(nodeModules, 'tsrs', 'package.json'), { name: 'tsrs', version });
 	const dir = path.join(nodeModules, '@tsrs', platformPackage);
 	writeJson(path.join(dir, 'package.json'), { name: `@tsrs/${platformPackage}`, version });
