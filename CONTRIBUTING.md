@@ -5,7 +5,7 @@
 - Node.js 22.22 or newer (typescript-language-server 6, used by the TypeScript 6 fixture, needs it)
 
 The sources are TypeScript (`.mts`) that Node runs as committed by stripping the types; there is no build step. Only erasable syntax is allowed (no enums, namespaces or parameter properties), which `erasableSyntaxOnly` in `tsconfig.json` enforces. `scripts/launch.mjs` stays plain JavaScript so it can tell users on a Node without type stripping what is wrong instead of failing with a syntax error.
-- Claude Code 2.1.50 or newer, for `claude plugin validate` and for trying the plugin in a session
+- Claude Code 2.1.288 or newer, for `claude plugin validate` and for trying the plugin in a session
 
 ## Develop and test
 
@@ -33,11 +33,14 @@ Dependabot keeps the actions, the dev dependencies and the `ts7` and `ts6` fixtu
 ## Where things live
 
 - `scripts/launch.mjs` is the entry point Claude Code spawns; it checks that Node can run TypeScript and starts `scripts/main.mts`, which decides between the proxy and running the server directly. `scripts/resolve.mts` decides which server to run.
-- `scripts/proxy.mts` sits between Claude Code and the server: framing, lifecycle, and a list of features that each work around one gap in Claude Code's LSP client. Each feature is an appendix to be deleted once its gap closes upstream; the TODO at the top of each file names the issues. When no feature is left, delete the proxy too and let `main.mts` exec the server.
-- `scripts/document-sync.mts` keeps open documents in line with disk. To remove it: delete the file, its entry in `main.mts`, the "Files changed outside Claude Code" section of the README. `test/document-sync.test.mts` is written against the behaviour and must keep passing afterwards.
-- `scripts/diagnostics-bridge.mts` turns the native server's pull diagnostics into pushes. To remove it: delete the file, its entry in `main.mts`, `test/diagnostics-bridge.test.mts`, `test/helpers/fake-native-server.mjs` and the Diagnostics section of the README. `test/diagnostics.test.mts` is written against the behaviour and must keep passing afterwards.
+- `scripts/proxy.mts` sits between Claude Code and the server and runs a list of features that each work around one gap in Claude Code's LSP client. Each feature is an appendix to be deleted once its gap closes upstream; the TODO at the top of each file names the issues. When no feature is left and idle shutdown is gone too, delete the proxy and let `main.mts` exec the server.
+- `scripts/server.mts` runs the server process: lifecycle, signals, and idle shutdown with the replay that makes a restart invisible to the client. `test/idle-shutdown.test.mts` covers it.
+- `scripts/protocol.mts` holds the LSP message types and the framing both pipes use.
+- `scripts/document-sync.mts` keeps open documents in line with disk. To remove it: delete the file, its entry in `main.mts`, the `document_sync` option (in `plugin.json`, `.lsp.json` and the README's Options table) and the "Files changed outside Claude Code" section of the README. `test/document-sync.test.mts` is written against the behaviour and must keep passing afterwards.
+- `scripts/diagnostics-bridge.mts` turns the native server's pull diagnostics into pushes. To remove it: delete the file, its entry in `main.mts`, the `diagnostics_bridge` option (in `plugin.json`, `.lsp.json` and the README's Options table), `test/diagnostics-bridge.test.mts`, `test/helpers/fake-native-server.mjs` and the Diagnostics section of the README. `test/diagnostics.test.mts` is written against the behaviour and must keep passing afterwards.
+- `test/helpers/project.mts` creates throwaway projects: on a fixture's `node_modules` for tests that change files, or with a fake server from `test/helpers/` standing in for TypeScript 7. `test/helpers/fake-server.mjs` is that fake for the proxy's process handling, where a test needs a server that answers slowly or misbehaves.
 - `test/helpers/lsp-session.mts` drives the launcher as Claude Code does. Sessions run with the plugin's own `TYPESCRIPT_NATIVE_LSP_*` variables cleared and global roots emptied, so a developer's shell or global installs cannot steer a test.
-- `.lsp.json` is the server configuration Claude Code reads.
+- `.lsp.json` is the server configuration Claude Code reads. It passes each plugin option declared under `userConfig` in `.claude-plugin/plugin.json` to the launcher as an environment variable (`idle_shutdown_seconds` as `TYPESCRIPT_NATIVE_LSP_IDLE_SECONDS`, `document_sync` as `TYPESCRIPT_NATIVE_LSP_DOCUMENT_SYNC`, `diagnostics_bridge` as `TYPESCRIPT_NATIVE_LSP_DIAGNOSTICS`); tests and direct runs set those variables themselves. A test in `test/launch.test.mts` keeps the two files and the launcher's defaults in line.
 - `test/fixtures/claude-code-client.json` is what Claude Code sends in `initialize`, so session tests behave like the real client. To refresh it after a Claude Code release, point a throwaway plugin's `.lsp.json` at a script that appends every incoming message to a file and answers `initialize` with empty capabilities, run `claude -p` with `--plugin-dir` on any TypeScript file, and copy the captured `clientInfo`, `initializationOptions` and `capabilities`.
 - The README's "How it works" section is the specification for the resolution order. Change both together.
 

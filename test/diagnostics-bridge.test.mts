@@ -4,39 +4,23 @@
  * test/helpers/fake-native-server.mjs; the behavioural contract lives in
  * diagnostics.test.mjs and must keep passing without the bridge.
  */
-import { test, after } from 'node:test';
+import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import type { Message } from '../scripts/protocol.mts';
 import { startSession, diagnosticsFor, claudeCodeClient, uriOf, type Diagnostics } from './helpers/lsp-session.mts';
+import { fakeServerProject } from './helpers/project.mts';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const ts7 = path.join(here, 'fixtures', 'ts7');
 const skip = false === fs.existsSync(path.join(ts7, 'node_modules')) && 'run npm run fixtures';
 
-const tempDirs: string[] = [];
-after(() => {
-	for (const dir of tempDirs) {
-		fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
-	}
-});
-
-/**
- * A project whose "TypeScript 7" is the fake server: the launcher finds a
- * typescript package without a platform binary and runs its lib/tsc.js with
- * node, which is exactly the fake. FAKE_PULLS scripts the server's answers.
- */
+/** A project whose "TypeScript 7" is the fake native server; FAKE_PULLS scripts the server's answers. */
 function fakeProject(pulls: string): { root: string; file: string; env: NodeJS.ProcessEnv } {
-	const root = fs.mkdtempSync(path.join(os.tmpdir(), 'typescript-native-lsp-fake-'));
-	tempDirs.push(root);
-	const pkg = path.join(root, 'node_modules', 'typescript');
-	fs.mkdirSync(path.join(pkg, 'lib'), { recursive: true });
-	fs.writeFileSync(path.join(pkg, 'package.json'), JSON.stringify({ name: 'typescript', version: '7.0.2' }));
-	fs.copyFileSync(path.join(here, 'helpers', 'fake-native-server.mjs'), path.join(pkg, 'lib', 'tsc.js'));
-	fs.writeFileSync(path.join(root, 'a.ts'), 'export const a = 1;\n');
-	return { root, file: path.join(root, 'a.ts'), env: { FAKE_PULLS: pulls, PATH: '' } };
+	const { root, file, env } = fakeServerProject('fake-native-server.mjs');
+	return { root, file, env: { ...env, FAKE_PULLS: pulls } };
 }
 
 test('TYPESCRIPT_NATIVE_LSP_DIAGNOSTICS=0 runs the native server without pushed file diagnostics', { skip }, async () => {
@@ -120,6 +104,24 @@ test('an empty first pull is retried once and the retry is published', async () 
 		await session.initialize();
 		session.openFile(file);
 		const published = await session.waitForNotification((message): message is Diagnostics => diagnosticsFor(file)(message) && message.params.diagnostics.length > 0);
+		assert.equal(published.params.diagnostics[0]?.message, 'pull 2');
+	} finally {
+		await session.close();
+	}
+});
+
+test('after an idle restart, an empty first pull is retried again', async () => {
+	const { root, file, env } = fakeProject('empty,items');
+	const session = startSession(root, { env: { ...env, TYPESCRIPT_NATIVE_LSP_IDLE_SECONDS: '1', TYPESCRIPT_NATIVE_LSP_DEBUG: '1' } });
+	const withItems = (message: Message): message is Diagnostics => diagnosticsFor(file)(message) && message.params.diagnostics.length > 0;
+	try {
+		await session.initialize();
+		session.openFile(file);
+		await session.waitForNotification(withItems);
+		await session.waitForLog('server stopped');
+		const before = session.notifications.length;
+		session.changeFile(file, 2, 'export const a = 2;\n');
+		const published = await session.waitForNotification((message): message is Diagnostics => session.notifications.indexOf(message) >= before && withItems(message));
 		assert.equal(published.params.diagnostics[0]?.message, 'pull 2');
 	} finally {
 		await session.close();

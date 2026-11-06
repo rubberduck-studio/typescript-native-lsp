@@ -27,7 +27,8 @@
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import type { TextDocumentContentChangeEvent } from 'vscode-languageserver-protocol';
-import { isMethod, methodMessage, type Feature, type Message, type MethodMessage, type ProxyContext } from './proxy.mts';
+import { isMethod, methodMessage, type Message, type MethodMessage } from './protocol.mts';
+import type { Feature, ProxyContext } from './proxy.mts';
 
 interface TrackedDocument {
 	file: string;
@@ -43,7 +44,7 @@ interface TrackedDocument {
 
 export function documentSync(ctx: ProxyContext): Feature {
 	const documents = new Map<string, TrackedDocument>();
-	ctx.log('document sync on; set TYPESCRIPT_NATIVE_LSP_DOCUMENT_SYNC=0 to run without it');
+	ctx.log('document sync on; set the plugin option document_sync to false in /config to run without it');
 
 	return {
 		onClient(message) {

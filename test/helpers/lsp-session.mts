@@ -2,10 +2,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import type { ClientCapabilities, PublishDiagnosticsParams } from 'vscode-languageserver-protocol';
-import type { Message, MethodMessage } from '../../scripts/proxy.mts';
+import type { ClientCapabilities, Hover, PublishDiagnosticsParams } from 'vscode-languageserver-protocol';
+import type { Message, MethodMessage } from '../../scripts/protocol.mts';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
+/** Shorter than the test timeout, so a request that is never answered fails with the launcher's stderr instead of a bare timeout. */
+const REQUEST_TIMEOUT_MS = 30000;
 const launcher = path.join(here, '..', '..', 'scripts', 'launch.mjs');
 
 interface ClaudeCodeClient {
@@ -47,6 +49,8 @@ export interface Session {
 	/** Resolves with the first notification (past or future) matching the predicate, or rejects after the timeout. */
 	waitForNotification<T extends Message>(predicate: (message: Message) => message is T, options?: { timeoutMs?: number }): Promise<T>;
 	waitForNotification(predicate: (message: Message) => boolean, options?: { timeoutMs?: number }): Promise<Message>;
+	/** Resolves once the launcher has written `text` to stderr at least `count` times, or rejects after the timeout. */
+	waitForLog(text: string, options?: { count?: number; timeoutMs?: number }): Promise<void>;
 	/** Resolves true if a matching notification arrives within the window, false otherwise. */
 	receivesNotification(predicate: (message: Message) => boolean, options?: { withinMs?: number }): Promise<boolean>;
 	initialize(): Promise<Message>;
@@ -182,9 +186,16 @@ export function startSession(projectDir: string, { env = {}, capabilities = clau
 			return stderr;
 		},
 		request(method, params) {
-			return new Promise(resolve => {
+			return new Promise((resolve, reject) => {
 				const id = ++nextId;
-				pending.set(id, resolve);
+				const timer = setTimeout(() => {
+					pending.delete(id);
+					reject(new Error(`no response to ${method} within ${REQUEST_TIMEOUT_MS}ms\nstderr:\n${stderr}`));
+				}, REQUEST_TIMEOUT_MS);
+				pending.set(id, message => {
+					clearTimeout(timer);
+					resolve(message);
+				});
 				write(undefined === params ? { jsonrpc: '2.0', id, method } : { jsonrpc: '2.0', id, method, params });
 			});
 		},
@@ -198,6 +209,15 @@ export function startSession(projectDir: string, { env = {}, capabilities = clau
 				return true;
 			} catch {
 				return false;
+			}
+		},
+		async waitForLog(text, { count = 1, timeoutMs = 15000 } = {}) {
+			const deadline = Date.now() + timeoutMs;
+			while (stderr.split(text).length - 1 < count) {
+				if (Date.now() > deadline) {
+					throw new Error(`stderr did not show ${JSON.stringify(text)} ${count} time(s) within ${timeoutMs}ms\nstderr:\n${stderr}`);
+				}
+				await new Promise(resolve => setTimeout(resolve, 50));
 			}
 		},
 		async initialize() {
@@ -240,6 +260,15 @@ export function startSession(projectDir: string, { env = {}, capabilities = clau
 
 export function uriOf(filePath: string): string {
 	return pathToFileURL(filePath).href;
+}
+
+/** The text of a hover at a position, with all its parts joined; empty when there is no hover. */
+export async function hoverText(session: Session, file: string, line: number, character: number): Promise<string> {
+	const { result } = await session.request('textDocument/hover', { textDocument: { uri: uriOf(file) }, position: { line, character } });
+	if (false === isHover(result)) {
+		return '';
+	}
+	return [result.contents].flat().map(part => ('string' === typeof part ? part : part.value)).join('\n');
 }
 
 /** True when two file URIs name the same file, regardless of percent-encoding or drive-letter case. */
@@ -294,4 +323,8 @@ function cleanEnv(): NodeJS.ProcessEnv {
 		}
 	}
 	return env;
+}
+
+function isHover(value: unknown): value is Hover {
+	return 'object' === typeof value && null !== value && 'contents' in value;
 }

@@ -4,62 +4,18 @@
  * commands, git, formatters and codegen change files silently. Answers must
  * still match the files on disk, for every supported TypeScript version.
  */
-import { test, after } from 'node:test';
+import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { Hover, Location, LocationLink } from 'vscode-languageserver-protocol';
-import { startSession, uriOf, diagnosticsFor, claudeCodeClient, type Session } from './helpers/lsp-session.mts';
-
-const fixtures = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures');
-const tempDirs: string[] = [];
-after(() => {
-	for (const dir of tempDirs) {
-		fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
-	}
-});
-
-/** A throwaway project that borrows a fixture's node_modules, so tests can change files freely. */
-function project(engine: string, files: Record<string, string>): string {
-	const root = fs.mkdtempSync(path.join(os.tmpdir(), `typescript-native-lsp-sync-${engine}-`));
-	tempDirs.push(root);
-	fs.symlinkSync(path.join(fixtures, engine, 'node_modules'), path.join(root, 'node_modules'), 'junction');
-	fs.writeFileSync(path.join(root, 'package-lock.json'), '{}');
-	fs.writeFileSync(path.join(root, 'tsconfig.json'), JSON.stringify({ compilerOptions: { strict: true, module: 'esnext', target: 'es2022', moduleResolution: 'bundler', noEmit: true }, include: ['src'] }));
-	for (const [name, text] of Object.entries(files)) {
-		write(root, name, text);
-	}
-	return root;
-}
-
-function write(root: string, name: string, text: string): string {
-	const file = path.join(root, 'src', name);
-	fs.mkdirSync(path.dirname(file), { recursive: true });
-	fs.writeFileSync(file, text);
-	return file;
-}
-
-function src(root: string, name: string): string {
-	return path.join(root, 'src', name);
-}
-
-async function hoverText(session: Session, file: string, line: number, character: number): Promise<string> {
-	const { result } = await session.request('textDocument/hover', { textDocument: { uri: uriOf(file) }, position: { line, character } });
-	if (false === isHover(result)) {
-		return '';
-	}
-	return [result.contents].flat().map(part => ('string' === typeof part ? part : part.value)).join('\n');
-}
+import type { Location, LocationLink } from 'vscode-languageserver-protocol';
+import { startSession, uriOf, diagnosticsFor, claudeCodeClient, hoverText, type Session } from './helpers/lsp-session.mts';
+import { missingFixture, tempProject as project, writeSource as write, sourcePath as src } from './helpers/project.mts';
 
 async function definitionFiles(session: Session, file: string, line: number, character: number): Promise<string[]> {
 	const { result } = await session.request('textDocument/definition', { textDocument: { uri: uriOf(file) }, position: { line, character } });
 	return [result ?? []].flat().filter(isLocation).map(location => fileURLToPath('uri' in location ? location.uri : location.targetUri));
-}
-
-function isHover(value: unknown): value is Hover {
-	return 'object' === typeof value && null !== value && 'contents' in value;
 }
 
 function isLocation(value: unknown): value is Location | LocationLink {
@@ -71,7 +27,7 @@ function settle(ms = 1000): Promise<void> {
 }
 
 for (const engine of ['ts7', 'ts6']) {
-	const skip = false === fs.existsSync(path.join(fixtures, engine, 'node_modules')) && 'run npm run fixtures';
+	const skip = missingFixture(engine);
 
 	test(`${engine}: a file rewritten on disk after the client opened it is answered from disk`, { skip }, async () => {
 		const root = project(engine, { 'other.ts': 'export const other = 2;\n' });
@@ -128,7 +84,7 @@ for (const engine of ['ts7', 'ts6']) {
 }
 
 for (const engine of ['ts7', 'ts6']) {
-	const skip = false === fs.existsSync(path.join(fixtures, engine, 'node_modules')) && 'run npm run fixtures';
+	const skip = missingFixture(engine);
 
 	test(`${engine}: diagnostics after a shell rename report no conflict with the renamed-away file`, { skip }, async () => {
 		const root = project(engine, {
@@ -161,7 +117,7 @@ for (const engine of ['ts7', 'ts6']) {
 }
 
 for (const engine of ['ts7', 'ts6']) {
-	const skip = false === fs.existsSync(path.join(fixtures, engine, 'node_modules')) && 'run npm run fixtures';
+	const skip = missingFixture(engine);
 
 	test(`${engine}: a file that returns to disk after it was deleted is served again without a client edit`, { skip }, async () => {
 		const root = project(engine, { 'a.ts': 'export const a = 1;\n' });
@@ -183,7 +139,7 @@ for (const engine of ['ts7', 'ts6']) {
 }
 
 /** Claude Code 2.1.288 began advertising file watching without ever sending events; advertised capabilities must not switch document sync off. */
-test('a client that advertises file watching, even with dynamic registration, still gets open documents synced from disk', { skip: false === fs.existsSync(path.join(fixtures, 'ts7', 'node_modules')) && 'run npm run fixtures' }, async () => {
+test('a client that advertises file watching, even with dynamic registration, still gets open documents synced from disk', { skip: missingFixture('ts7') }, async () => {
 	const root = project('ts7', { 'other.ts': 'export const other = 2;\n' });
 	const session = startSession(root, { capabilities: { ...claudeCodeClient.capabilities, workspace: { ...claudeCodeClient.capabilities.workspace, didChangeWatchedFiles: { dynamicRegistration: true } } } });
 	try {

@@ -17,5 +17,27 @@
     "tsgo",
     "typescript-go",
     "language-server"
-  ]
+  ],
+  "userConfig": {
+    "idle_shutdown_seconds": {
+      "type": "number",
+      "title": "Idle shutdown (seconds)",
+      "description": "Stop the TypeScript server after this many seconds without requests or edits, to give its memory back; it starts again when Claude next needs it. 0 keeps it running for the whole session.",
+      "default": 600,
+      "min": 0,
+      "max": 2147483
+    },
+    "document_sync": {
+      "type": "boolean",
+      "title": "Sync open files from disk",
+      "description": "Before each request, send the server the current content of open files that changed on disk outside Claude's own edits, and close deleted ones. Turn off only to rule it out when troubleshooting.",
+      "default": true
+    },
+    "diagnostics_bridge": {
+      "type": "boolean",
+      "title": "Report type errors after edits (TypeScript 7)",
+      "description": "Ask TypeScript 7's server for a file's errors after each edit and pass them to Claude, which only listens for pushed errors. Turn off only to rule it out when troubleshooting.",
+      "default": true
+    }
+  }
 }

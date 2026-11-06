@@ -17,7 +17,8 @@
  * the file's diagnostics from the server and publishes the result to the client.
  */
 import type { Diagnostic, DocumentDiagnosticReport } from 'vscode-languageserver-protocol';
-import { isMethod, methodMessage, type Feature, type Message, type ProxyContext } from './proxy.mts';
+import { isMethod, methodMessage, type Message } from './protocol.mts';
+import type { Feature, ProxyContext } from './proxy.mts';
 
 const DEBOUNCE_MS = 50;
 const RETRY_MS = 300;
@@ -43,13 +44,16 @@ export function diagnosticsBridge(ctx: ProxyContext): Feature {
 	const pending = new Map<string, PendingPull>();
 	const retries = new Set<NodeJS.Timeout>();
 
-	ctx.log('diagnostics bridge on; set TYPESCRIPT_NATIVE_LSP_DIAGNOSTICS=0 to run the server without it');
+	ctx.log('diagnostics bridge on; set the plugin option diagnostics_bridge to false in /config to run the server without it');
 	ctx.on('changed', uri => {
 		if (enabled) {
 			schedule(uri, null);
 		}
 	});
 	ctx.on('closed', uri => forget(uri));
+	ctx.on('restart', () => {
+		firstPullDone = false;
+	});
 	ctx.on('shutdown', () => {
 		for (const document of documents.values()) {
 			clearTimer(document.timer);

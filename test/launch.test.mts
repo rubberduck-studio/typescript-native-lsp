@@ -6,13 +6,14 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import type { InitializeResult } from 'vscode-languageserver-protocol';
-import { startSession } from './helpers/lsp-session.mts';
+import { startSession, hoverText } from './helpers/lsp-session.mts';
 
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const launcher = path.join(here, '..', 'scripts', 'launch.mjs');
 const fixtures = path.join(here, 'fixtures');
-const lspConfig: { command: string; args: string[]; extensionToLanguage: Record<string, string> } = JSON.parse(fs.readFileSync(path.join(here, '..', '.lsp.json'), 'utf8')).typescript;
+const lspConfig: { command: string; args: string[]; extensionToLanguage: Record<string, string>; env?: Record<string, string> } = JSON.parse(fs.readFileSync(path.join(here, '..', '.lsp.json'), 'utf8')).typescript;
+const manifest: { userConfig?: Record<string, { default?: unknown }> } = JSON.parse(fs.readFileSync(path.join(here, '..', '.claude-plugin', 'plugin.json'), 'utf8'));
 
 function fixture(name: string): string {
 	return path.join(fixtures, name);
@@ -129,7 +130,10 @@ for (const [name, env, expected] of [
 	['ts7', {}, ['document-sync', 'diagnostics-bridge']],
 	['ts6', {}, ['document-sync']],
 	['ts7', { TYPESCRIPT_NATIVE_LSP_DIAGNOSTICS: '0' }, ['document-sync']],
+	['ts7', { TYPESCRIPT_NATIVE_LSP_DIAGNOSTICS: 'false' }, ['document-sync']],
 	['ts7', { TYPESCRIPT_NATIVE_LSP_DOCUMENT_SYNC: '0' }, ['diagnostics-bridge']],
+	['ts7', { TYPESCRIPT_NATIVE_LSP_DOCUMENT_SYNC: 'false', TYPESCRIPT_NATIVE_LSP_DIAGNOSTICS: 'true' }, ['diagnostics-bridge']],
+	['ts7', { TYPESCRIPT_NATIVE_LSP_DOCUMENT_SYNC: 'off' }, ['document-sync', 'diagnostics-bridge']],
 	['ts6', { TYPESCRIPT_NATIVE_LSP_DOCUMENT_SYNC: '0' }, []],
 ] satisfies Array<[string, NodeJS.ProcessEnv, string[]]>) {
 	test(`${name} with ${JSON.stringify(env)} runs the proxy features ${JSON.stringify(expected)}`, { skip: false === installed(name) && 'run npm run fixtures' }, () => {
@@ -138,5 +142,57 @@ for (const [name, env, expected] of [
 		const parsed: unknown = JSON.parse(result.stdout);
 		assert.ok('object' === typeof parsed && null !== parsed && 'proxyFeatures' in parsed, result.stdout);
 		assert.deepEqual(parsed.proxyFeatures, expected);
+		assert.equal(result.stderr.includes('ignoring TYPESCRIPT_NATIVE_LSP_'), Object.values(env).includes('off'), result.stderr);
 	});
 }
+
+for (const [value, expected] of [
+	[undefined, 600],
+	['0', 0],
+	['90', 90],
+	['99999999', 99999999],
+	['soon', 600],
+	['-5', 600],
+] satisfies Array<[string | undefined, number]>) {
+	test(`TYPESCRIPT_NATIVE_LSP_IDLE_SECONDS=${String(value)} resolves to ${expected} seconds`, { skip: false === installed('ts7') && 'run npm run fixtures' }, () => {
+		const env = undefined === value ? {} : { TYPESCRIPT_NATIVE_LSP_IDLE_SECONDS: value };
+		const result = spawnSync(process.execPath, [launcher, '--resolve'], { cwd: fixture('ts7'), env: { ...envFor(fixture('ts7')), ...env }, encoding: 'utf8' });
+		assert.equal(result.status, 0, result.stderr);
+		const parsed: unknown = JSON.parse(result.stdout);
+		assert.ok('object' === typeof parsed && null !== parsed && 'idleSeconds' in parsed, result.stdout);
+		assert.equal(parsed.idleSeconds, expected);
+		assert.equal(result.stderr.includes('ignoring TYPESCRIPT_NATIVE_LSP_IDLE_SECONDS'), 600 === expected && undefined !== value);
+	});
+}
+
+test('every plugin option reaches the launcher through .lsp.json, with the same default on both sides', { skip: false === installed('ts7') && 'run npm run fixtures' }, () => {
+	const passed = new Map<string, string>();
+	for (const [variable, reference] of Object.entries(lspConfig.env ?? {})) {
+		const option = /^\$\{user_config\.(\w+)\}$/.exec(reference)?.[1];
+		assert.ok(undefined !== option, `.lsp.json must pass ${variable} a plugin option, got ${reference}`);
+		passed.set(option, variable);
+	}
+	assert.deepEqual([...passed.keys()].sort(), Object.keys(manifest.userConfig ?? {}).sort(), 'plugin.json options and the ones .lsp.json passes on must match');
+	const result = spawnSync(process.execPath, [launcher, '--resolve'], { cwd: fixture('ts7'), env: envFor(fixture('ts7')), encoding: 'utf8' });
+	assert.equal(result.status, 0, result.stderr);
+	const resolved: { idleSeconds: number; proxyFeatures: string[] } = JSON.parse(result.stdout);
+	const defaults = Object.fromEntries(Object.entries(manifest.userConfig ?? {}).map(([option, { default: value }]) => [passed.get(option), value]));
+	assert.deepEqual(defaults, {
+		TYPESCRIPT_NATIVE_LSP_IDLE_SECONDS: resolved.idleSeconds,
+		TYPESCRIPT_NATIVE_LSP_DOCUMENT_SYNC: resolved.proxyFeatures.includes('document-sync'),
+		TYPESCRIPT_NATIVE_LSP_DIAGNOSTICS: resolved.proxyFeatures.includes('diagnostics-bridge'),
+	});
+});
+
+test('with idle shutdown and both features off, the server runs directly and still answers', { skip: false === installed('ts7') && 'run npm run fixtures' }, async () => {
+	const file = path.join(fixture('ts7'), 'error.ts');
+	const session = startSession(fixture('ts7'), { env: { TYPESCRIPT_NATIVE_LSP_IDLE_SECONDS: '0', TYPESCRIPT_NATIVE_LSP_DOCUMENT_SYNC: 'false', TYPESCRIPT_NATIVE_LSP_DIAGNOSTICS: 'false' } });
+	try {
+		await session.initialize();
+		session.openFile(file);
+		assert.notEqual(await hoverText(session, file, 0, 13), '');
+		assert.doesNotMatch(session.stderr, /idle shutdown after|document sync on|diagnostics bridge on/);
+	} finally {
+		await session.close();
+	}
+});

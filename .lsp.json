@@ -12,6 +12,11 @@
       ".mjs": "javascript",
       ".cjs": "javascript"
     },
+    "env": {
+      "TYPESCRIPT_NATIVE_LSP_IDLE_SECONDS": "${user_config.idle_shutdown_seconds}",
+      "TYPESCRIPT_NATIVE_LSP_DOCUMENT_SYNC": "${user_config.document_sync}",
+      "TYPESCRIPT_NATIVE_LSP_DIAGNOSTICS": "${user_config.diagnostics_bridge}"
+    },
     "workspaceFolder": "${CLAUDE_PROJECT_DIR}",
     "startupTimeout": 60000
   }
