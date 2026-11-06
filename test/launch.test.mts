@@ -133,7 +133,8 @@ for (const [name, env, expected] of [
 	['ts7', { TYPESCRIPT_NATIVE_LSP_DIAGNOSTICS: 'false' }, ['document-sync']],
 	['ts7', { TYPESCRIPT_NATIVE_LSP_DOCUMENT_SYNC: '0' }, ['diagnostics-bridge']],
 	['ts7', { TYPESCRIPT_NATIVE_LSP_DOCUMENT_SYNC: 'false', TYPESCRIPT_NATIVE_LSP_DIAGNOSTICS: 'true' }, ['diagnostics-bridge']],
-	['ts7', { TYPESCRIPT_NATIVE_LSP_DOCUMENT_SYNC: 'off' }, ['document-sync', 'diagnostics-bridge']],
+	['ts7', { TYPESCRIPT_NATIVE_LSP_DOCUMENT_SYNC: 'off', TYPESCRIPT_NATIVE_LSP_DIAGNOSTICS: 'Yes' }, ['diagnostics-bridge']],
+	['ts7', { TYPESCRIPT_NATIVE_LSP_DOCUMENT_SYNC: 'nope' }, ['document-sync', 'diagnostics-bridge']],
 	['ts6', { TYPESCRIPT_NATIVE_LSP_DOCUMENT_SYNC: '0' }, []],
 ] satisfies Array<[string, NodeJS.ProcessEnv, string[]]>) {
 	test(`${name} with ${JSON.stringify(env)} runs the proxy features ${JSON.stringify(expected)}`, { skip: false === installed(name) && 'run npm run fixtures' }, () => {
@@ -142,7 +143,7 @@ for (const [name, env, expected] of [
 		const parsed: unknown = JSON.parse(result.stdout);
 		assert.ok('object' === typeof parsed && null !== parsed && 'proxyFeatures' in parsed, result.stdout);
 		assert.deepEqual(parsed.proxyFeatures, expected);
-		assert.equal(result.stderr.includes('ignoring TYPESCRIPT_NATIVE_LSP_'), Object.values(env).includes('off'), result.stderr);
+		assert.equal(result.stderr.includes('ignoring TYPESCRIPT_NATIVE_LSP_'), Object.values(env).includes('nope'), result.stderr);
 	});
 }
 

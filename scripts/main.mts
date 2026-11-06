@@ -102,13 +102,13 @@ function readIdleSeconds(value: string | undefined): number {
 	return DEFAULT_IDLE_SECONDS;
 }
 
-/** An on/off switch, on unless set to false or 0. Anything unrecognised leaves it on. */
+/** An on/off switch in the spellings Claude Code accepts for a boolean option; on unless set to off. Anything unrecognised leaves it on. */
 function readSwitch(name: string): boolean {
 	const value = process.env[name]?.trim().toLowerCase();
-	if (undefined === value || '' === value || 'true' === value || '1' === value) {
+	if (undefined === value || '' === value || ['true', '1', 'yes', 'on'].includes(value)) {
 		return true;
 	}
-	if ('false' === value || '0' === value) {
+	if (['false', '0', 'no', 'off'].includes(value)) {
 		return false;
 	}
 	log(`ignoring ${name}=${process.env[name] ?? ''}: it must be true or false; leaving it on`);
