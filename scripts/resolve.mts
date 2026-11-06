@@ -7,8 +7,11 @@
  * The right choice therefore depends on the TypeScript the project uses.
  *
  * Resolution order:
- *   1. TYPESCRIPT_NATIVE_LSP_TSDK: an explicit path to a `typescript` package
- *      directory (TypeScript 7 or newer).
+ *   1. TYPESCRIPT_NATIVE_LSP_TSDK: an explicit path, relative to the project
+ *      directory, to a `typescript` package directory of TypeScript 7 or newer, or
+ *      to tsrs (a Rust port of TypeScript 7 whose `tsrs --lsp --stdio` speaks the
+ *      same protocol) in any of the forms tsrs documents for editors: its package
+ *      directory, its `tsdk` directory, or its `@tsrs/<platform>` package.
  *   2. Every typescript package installed under `node_modules`, walking up from the
  *      project directory to the nearest lockfile or git root. A package counts by
  *      the name in its own package.json, not by its directory, so an alias such as
@@ -50,6 +53,8 @@ export interface ResolveOptions {
 	execPath?: string;
 	/** Global `node_modules` directories to search; derived from env and execPath when omitted. */
 	globalRoots?: string[] | undefined;
+	/** Whether the C library is musl, for picking tsrs's Linux build; detected when omitted. */
+	musl?: boolean;
 }
 
 interface Command {
@@ -62,6 +67,7 @@ interface Command {
 export interface Plan extends Command {
 	reason: string;
 	typescript?: { dir: string; version: string };
+	tsrs?: { dir: string; version: string };
 }
 
 interface PackageJson {
@@ -77,22 +83,27 @@ interface FoundTypescript {
 
 interface Context {
 	env: NodeJS.ProcessEnv;
+	musl: boolean;
 	platform: NodeJS.Platform;
 	arch: string;
 	execPath: string;
 	globalRoots: string[];
 }
 
-export function resolveServer({ projectDir, env = process.env, platform = process.platform, arch = process.arch, execPath = process.execPath, globalRoots }: ResolveOptions): Plan {
-	const context: Context = { env, platform, arch, execPath, globalRoots: globalRoots ?? globalNodeModules({ env, platform, execPath }) };
+export function resolveServer({ projectDir, env = process.env, platform = process.platform, arch = process.arch, execPath = process.execPath, globalRoots, musl }: ResolveOptions): Plan {
+	const context: Context = { env, platform, arch, execPath, globalRoots: globalRoots ?? globalNodeModules({ env, platform, execPath }), musl: musl ?? runsOnMusl() };
 	const start = path.resolve(projectDir);
 
 	const override = env.TYPESCRIPT_NATIVE_LSP_TSDK;
 	if (override) {
-		const dir = path.resolve(override);
+		const dir = path.resolve(start, override);
+		const tsrs = tsrsPlan(dir, context);
+		if (null !== tsrs) {
+			return tsrs;
+		}
 		const pkg = readPackage(dir);
 		if (null === pkg || 'typescript' !== pkg.name) {
-			throw new ResolveError(`TYPESCRIPT_NATIVE_LSP_TSDK is set to "${override}" but that is not a typescript package directory`);
+			throw new ResolveError(`TYPESCRIPT_NATIVE_LSP_TSDK is set to "${override}" but that is neither a typescript nor a tsrs package directory`);
 		}
 		if (majorOf(pkg.version) < 7) {
 			throw new ResolveError(`TYPESCRIPT_NATIVE_LSP_TSDK points at TypeScript ${pkg.version}; the override applies to TypeScript 7 or newer, typescript-language-server locates TypeScript 6 and older itself`);
@@ -216,6 +227,103 @@ function findWorkspaceTypescript(rootDir: string): FoundTypescript | null {
 		}
 	}
 	return best;
+}
+
+/* ---------- tsrs ---------- */
+
+/**
+ * tsrs as TYPESCRIPT_NATIVE_LSP_TSDK names it, in any of the places tsrs's own
+ * editor setup points at: the `tsrs` package, its `tsdk` directory, or the
+ * `@tsrs/<platform>` package that holds the binary. Null when the directory is
+ * none of these; an error when it is tsrs without a binary for this platform.
+ */
+function tsrsPlan(dir: string, context: Context): Plan | null {
+	const own = readPackage(dir);
+	if (null !== own && own.name.startsWith('@tsrs/')) {
+		const executable = path.join(dir, 'win32' === context.platform ? 'tsrs.exe' : 'tsrs');
+		if (false === fs.existsSync(executable)) {
+			throw new ResolveError(`TYPESCRIPT_NATIVE_LSP_TSDK points at ${own.name} ${own.version}, which has no ${path.basename(executable)}`);
+		}
+		return { command: executable, args: LSP_ARGS, native: true, reason: `tsrs ${own.version} via TYPESCRIPT_NATIVE_LSP_TSDK at ${dir}`, tsrs: { dir, version: own.version } };
+	}
+	const pkgDir = null !== own && 'tsrs' === own.name ? dir : 'tsdk' === path.basename(dir) ? path.dirname(dir) : null;
+	const pkg = null === pkgDir ? null : readPackage(pkgDir);
+	if (null === pkgDir || null === pkg || 'tsrs' !== pkg.name) {
+		return null;
+	}
+	const override = context.env.TSRS_BINARY;
+	if (override) {
+		const executable = path.resolve(override);
+		if (false === fs.existsSync(executable)) {
+			throw new ResolveError(`TSRS_BINARY is set to "${override}", which does not exist`);
+		}
+		return { command: executable, args: LSP_ARGS, native: true, reason: `tsrs from TSRS_BINARY at ${executable}, for tsrs ${pkg.version} via TYPESCRIPT_NATIVE_LSP_TSDK at ${pkgDir}`, tsrs: { dir: pkgDir, version: pkg.version } };
+	}
+	const executable = tsrsExecutable(pkgDir, context);
+	if (null === executable) {
+		throw new ResolveError(`TYPESCRIPT_NATIVE_LSP_TSDK points at tsrs ${pkg.version} at ${pkgDir}, but none of ${tsrsPlatformPackages(context).join(', ')} is installed with it`);
+	}
+	return { command: executable, args: LSP_ARGS, native: true, reason: `tsrs ${pkg.version} via TYPESCRIPT_NATIVE_LSP_TSDK at ${pkgDir}`, tsrs: { dir: pkgDir, version: pkg.version } };
+}
+
+/**
+ * Mirrors tsrs's own lib/getExePath.js: `tsrs` (`tsrs.exe` on Windows) at the
+ * root of the platform package next to the tsrs package, `@tsrs/<platform>-<arch>`,
+ * with a `-gnu` or `-musl` suffix on Linux. Resolution starts from the real path,
+ * as for typescript's platform package, because pnpm keeps the platform package
+ * next to the target of the link.
+ */
+function tsrsExecutable(pkgDir: string, context: Context): string | null {
+	const { platform } = context;
+	let realDir;
+	try {
+		realDir = fs.realpathSync(pkgDir);
+	} catch {
+		return null;
+	}
+	const require = createRequire(path.join(realDir, 'package.json'));
+	for (const name of tsrsPlatformPackages(context)) {
+		let platformPackageJson;
+		try {
+			platformPackageJson = require.resolve(`${name}/package.json`);
+		} catch {
+			continue;
+		}
+		const executable = path.join(path.dirname(platformPackageJson), 'win32' === platform ? 'tsrs.exe' : 'tsrs');
+		if (fs.existsSync(executable)) {
+			return 'win32' === platform && executable.length >= 248 ? `\\\\?\\${executable}` : executable;
+		}
+	}
+	return null;
+}
+
+/** tsrs's platform packages for a platform, on Linux the build for the C library in use first. */
+function tsrsPlatformPackages({ platform, arch, musl }: Context): string[] {
+	const name = `@tsrs/${platform}-${arch}`;
+	if ('linux' !== platform) {
+		return [name];
+	}
+	return musl ? [`${name}-musl`, `${name}-gnu`] : [`${name}-gnu`, `${name}-musl`];
+}
+
+/** Whether this Node runs on musl, from Node's own diagnostic report as tsrs checks first; no process is started. */
+function runsOnMusl(): boolean {
+	if ('linux' !== process.platform) {
+		return false;
+	}
+	let report: unknown;
+	try {
+		report = process.report.getReport();
+	} catch {
+		return false;
+	}
+	if (false === isRecord(report)) {
+		return false;
+	}
+	if (isRecord(report.header) && undefined !== report.header.glibcVersionRuntime) {
+		return false;
+	}
+	return Array.isArray(report.sharedObjects) && report.sharedObjects.some(file => 'string' === typeof file && (file.includes('libc.musl-') || file.includes('ld-musl-')));
 }
 
 /* ---------- native (TypeScript 7+) ---------- */
@@ -391,6 +499,10 @@ function readPackage(dir: string): PackageJson | null {
 		return null;
 	}
 	return isPackageJson(parsed) ? parsed : null;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return 'object' === typeof value && null !== value;
 }
 
 function isPackageJson(value: unknown): value is PackageJson {

@@ -12,8 +12,8 @@ The sources are TypeScript (`.mts`) that Node runs as committed by stripping the
 ```bash
 npm install                                               # dev dependencies: TypeScript 7 and type definitions
 npm run typecheck                                         # tsc over scripts and tests
-npm run fixtures                                          # installs TypeScript 7, TypeScript 6 and an aliased setup under test/fixtures
-npm test                                                  # resolver units, initialize handshakes, diagnostics and exit paths against both servers, bridge edge cases against a fake server
+npm run fixtures                                          # installs TypeScript 7, TypeScript 6, tsrs and an aliased setup under test/fixtures
+npm test                                                  # resolver units, initialize handshakes, diagnostics and exit paths against TypeScript 7, TypeScript 6 and tsrs, process handling and bridge edge cases against fake servers
 claude plugin validate --strict .claude-plugin/plugin.json
 claude plugin validate --strict .claude-plugin/marketplace.json
 ```
@@ -28,7 +28,7 @@ claude --plugin-dir /path/to/typescript-native-lsp --settings '{"enabledPlugins"
 
 CI runs the same tests on Linux, macOS and Windows with Node 22, 24 and 26, and validates both manifests. Every Monday it also runs them with the TypeScript 7 fixture on `typescript@next`; a failure there is advance notice of a change in the native server, not a broken build.
 
-Dependabot keeps the actions, the dev dependencies and the `ts7` and `ts6` fixtures current, staying within each fixture's TypeScript major. It skips `npm:` aliases, so the `aliased` fixture is bumped by hand.
+Dependabot keeps the actions, the dev dependencies and the `ts7`, `ts6` and `tsrs` fixtures current, keeping the TypeScript fixtures within their major; the `tsrs` fixture follows tsrs's releases, which name the TypeScript they port in a prerelease suffix. It skips `npm:` aliases, so the `aliased` fixture is bumped by hand.
 
 ## Where things live
 

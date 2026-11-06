@@ -60,14 +60,14 @@ Two settings are environment variables instead, because they are per project or 
 
 On every start the launcher decides which server to run for the session's project directory, in this order:
 
-1. `TYPESCRIPT_NATIVE_LSP_TSDK`, if set, as the path of a `typescript` package directory of version 7 or newer.
+1. `TYPESCRIPT_NATIVE_LSP_TSDK`, if set, as the path of a `typescript` package directory of version 7 or newer, or of tsrs (see [Using tsrs](#using-tsrs)). A relative path is taken from the project directory.
 2. Every typescript package installed under `node_modules`, walking up from the project directory to the nearest lockfile or git root. A package counts by the name in its own package.json, not by its directory, so an alias such as `"@typescript/native": "npm:typescript@7"` is found wherever the package manager hoisted it. The highest version wins, so an aliased TypeScript 7 next to a TypeScript 6 API shim is picked up. This works the same under npm, pnpm, yarn and bun.
 3. Workspace packages under `packages/*` and `apps/*` of that root, same rule.
 4. A `typescript` package of version 7 or newer under the global npm root (`TYPESCRIPT_NATIVE_LSP_GLOBAL_ROOTS` overrides where to look, as a `PATH`-style list).
 5. On macOS and Linux, `tsc` or `tsgo` on `PATH`, if `--version` reports 7 or newer.
 6. For TypeScript 6 and older: typescript-language-server, project-local, then under the global npm root, then on macOS and Linux on `PATH`. It locates TypeScript on its own, as the first `node_modules/typescript` above the workspace, so the launcher only checks that this will succeed and fails early with an explanation when it will not.
 
-TypeScript 7 or newer runs as the native binary from its platform package, `tsc --lsp --stdio`. TypeScript 6 or older runs typescript-language-server with `--stdio` through `node` on its entry file. Either way the launcher stays in front of the server as a small proxy that stops it when idle and works around gaps in Claude Code's LSP client, described in the sections below. With idle shutdown and both of its features switched off, the launcher replaces itself with the server on macOS and Linux. Nothing is ever run through a shell, and `.cmd` shims are never executed, which is why global installs are resolved as packages rather than found on `PATH` on Windows.
+TypeScript 7 or newer runs as the native binary from its platform package, `tsc --lsp --stdio`, and tsrs as its binary, `tsrs --lsp --stdio`. TypeScript 6 or older runs typescript-language-server with `--stdio` through `node` on its entry file. Either way the launcher stays in front of the server as a small proxy that stops it when idle and works around gaps in Claude Code's LSP client, described in the sections below. With idle shutdown and both of its features switched off, the launcher replaces itself with the server on macOS and Linux. Nothing is ever run through a shell, and `.cmd` shims are never executed, which is why global installs are resolved as packages rather than found on `PATH` on Windows.
 
 The launcher makes no network requests and sends no telemetry. The only processes it spawns besides the server are `tsc --version` and `tsgo --version`, on macOS and Linux only, when probing a binary on `PATH`. Everything it logs goes to stderr and shows up in `claude --debug` output prefixed with `[typescript-native-lsp]`.
 
@@ -89,6 +89,20 @@ Inside Claude Code:
 - `/plugin` lists installed plugins and shows start failures in its Errors tab, including an `Executable not found in $PATH` for a missing `node`.
 - `claude --debug` logs `Loaded 1 LSP server(s) from plugin: typescript-native-lsp` and `Total LSP servers loaded: N` at startup, then the launcher's `[typescript-native-lsp]` lines when the server starts, including the resolved project directory, TypeScript and command.
 - `/reload-plugins` picks up plugin changes without restarting the session.
+
+### Using tsrs
+
+[tsrs](https://github.com/oxc-project/tsrs) is a Rust port of TypeScript 7 whose language server speaks the same protocol as TypeScript 7's and serves diagnostics the same way, so everything here works with it. It is never picked up on its own, because a project may install it for type-checking in CI rather than in the editor. To run it for a project, install it there (`npm install -D tsrs`) and point `TYPESCRIPT_NATIVE_LSP_TSDK` at it in the project's `.claude/settings.json`:
+
+```json
+{
+  "env": {
+    "TYPESCRIPT_NATIVE_LSP_TSDK": "node_modules/tsrs"
+  }
+}
+```
+
+The setting also accepts the directories tsrs's own editor setup names, `node_modules/tsrs/tsdk` and on Windows its platform package such as `node_modules/@tsrs/win32-x64`. `TSRS_BINARY`, tsrs's variable for a local build, is honoured as tsrs's launcher does.
 
 ## Files changed outside Claude Code
 
@@ -124,7 +138,7 @@ Two consequences. The TypeScript that runs the server is the one installed where
 - **Diagnostics arrive one tool call late, and only for files Claude edits.** Claude Code does not wait for a language server's diagnostics after an edit; it attaches whatever arrived by the next tool call, and drops diagnostics for a file that the very next call edits again. It also opens a file with the server only when it edits it, so an edit that breaks a different file goes unnoticed until a full typecheck. Both are client behaviour, identical for every LSP plugin ([anthropics/claude-code#93321](https://github.com/anthropics/claude-code/issues/93321)).
 - **Windows has no real-session report yet.** The launcher is written for it (no `.cmd` spawning, npm shim parsing, no `execve`) and CI completes the initialize handshake with both servers on Windows, but nobody has used it from an interactive Claude Code session on Windows so far. Reports welcome.
 - **Monorepos with built package outputs.** When packages import each other through built declaration files (`dist/*.d.ts`), references from consuming packages resolve to the declaration files, not the source, so find-references on a source symbol will not list them. Any TypeScript server behaves this way. Claude Code additionally drops results in gitignored paths.
-- **Linux file watching for files Claude has not opened.** Files Claude has opened are kept in sync with disk on every platform (see above). Other files are the server's own business: the native server watches them only on macOS and Windows, so on Linux a file TypeScript 7 loaded as a dependency and that later changed outside Claude Code is not picked up until Claude opens it.
+- **Linux file watching for files Claude has not opened.** Files Claude has opened are kept in sync with disk on every platform (see above). Other files are the server's own business: the native server watches them only on macOS and Windows, so on Linux a file TypeScript 7 loaded as a dependency and that later changed outside Claude Code is not picked up until Claude opens it. tsrs does not watch them on Windows either yet.
 
 ## Development
 

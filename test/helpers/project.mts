@@ -13,6 +13,11 @@ after(() => {
 	}
 });
 
+/** What a session needs to run a fixture's server: tsrs is only chosen through TYPESCRIPT_NATIVE_LSP_TSDK, relative to the project. */
+export function engineEnv(engine: string): NodeJS.ProcessEnv {
+	return 'tsrs' === engine ? { TYPESCRIPT_NATIVE_LSP_TSDK: 'node_modules/tsrs' } : {};
+}
+
 /** Whether `npm run fixtures` has installed the fixture's TypeScript; tests skip with the returned reason when it has not. */
 export function missingFixture(engine: string): false | string {
 	return false === fs.existsSync(path.join(fixtures, engine, 'node_modules')) && 'run npm run fixtures';

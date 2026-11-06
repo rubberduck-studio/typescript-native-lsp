@@ -23,6 +23,7 @@ updates:
     directories:
       - /test/fixtures/ts7
       - /test/fixtures/ts6
+      - /test/fixtures/tsrs
     schedule:
       interval: weekly
     commit-message:

@@ -191,7 +191,7 @@ test('TYPESCRIPT_NATIVE_LSP_TSDK overrides project resolution, also as a relativ
 
 test('TYPESCRIPT_NATIVE_LSP_TSDK rejects non-typescript directories and TypeScript 6', () => {
 	const root = tempDir();
-	assert.throws(() => resolveServer({ projectDir: root, ...hermetic, env: { PATH: '', TYPESCRIPT_NATIVE_LSP_TSDK: root } }), /not a typescript package directory/);
+	assert.throws(() => resolveServer({ projectDir: root, ...hermetic, env: { PATH: '', TYPESCRIPT_NATIVE_LSP_TSDK: root } }), /neither a typescript nor a tsrs package directory/);
 	const tsdk = path.join(root, 'ts6');
 	writeFakeTypescript(tsdk, '6.0.3', { tsserver: true });
 	assert.throws(() => resolveServer({ projectDir: root, ...hermetic, env: { PATH: '', TYPESCRIPT_NATIVE_LSP_TSDK: tsdk } }), /TypeScript 7 or newer/);
@@ -284,4 +284,112 @@ test('resolution reads package.json only for directories that look like a typesc
 	assert.equal(resolveServer({ projectDir: root, ...hermetic }).typescript?.version, '7.0.2');
 	const reads = readFile.mock.calls.filter(call => String(call.arguments[0]).endsWith('package.json')).length;
 	assert.ok(reads < 5, `read ${reads} package.json files`);
+});
+
+/** A fake `tsrs` package and, unless `binary` is false, the platform package holding its binary, under a node_modules. */
+function writeFakeTsrs(nodeModules: string, { version = '0.22.0-ts7.1.0-beta', platformPackage = `${platform}-${process.arch}`, binary = true }: { version?: string; platformPackage?: string; binary?: boolean } = {}): string {
+	writeJson(path.join(nodeModules, 'tsrs', 'package.json'), { name: 'tsrs', version });
+	const dir = path.join(nodeModules, '@tsrs', platformPackage);
+	writeJson(path.join(dir, 'package.json'), { name: `@tsrs/${platformPackage}`, version });
+	const executable = path.join(dir, platformPackage.startsWith('win32') ? 'tsrs.exe' : 'tsrs');
+	if (binary) {
+		fs.writeFileSync(executable, '');
+	}
+	return executable;
+}
+
+/** Resolve options that name a server through TYPESCRIPT_NATIVE_LSP_TSDK, otherwise hermetic. */
+const tsdk = (dir: string): { env: NodeJS.ProcessEnv; globalRoots: string[] } => ({ ...hermetic, env: { ...hermetic.env, TYPESCRIPT_NATIVE_LSP_TSDK: dir } });
+
+test('TYPESCRIPT_NATIVE_LSP_TSDK pointing at a tsrs package runs tsrs', () => {
+	const root = tempDir();
+	writeFakeTypescript(path.join(root, 'node_modules', 'typescript'), '7.0.2');
+	const binary = writeFakeTsrs(path.join(root, 'node_modules'));
+	const plan = resolveServer({ projectDir: root, ...tsdk(path.join(root, 'node_modules', 'tsrs')) });
+	assert.equal(fs.realpathSync(plan.command), fs.realpathSync(binary));
+	assert.deepEqual(plan.args, ['--lsp', '--stdio']);
+	assert.equal(plan.native, true);
+	assert.equal(plan.tsrs?.version, '0.22.0-ts7.1.0-beta');
+	assert.equal(plan.typescript, undefined);
+	assert.match(plan.reason, /^tsrs 0\.22\.0-ts7\.1\.0-beta via TYPESCRIPT_NATIVE_LSP_TSDK/);
+});
+
+test('a relative TYPESCRIPT_NATIVE_LSP_TSDK is taken from the project directory, as a project settings file would set it', () => {
+	const root = tempDir();
+	const binary = writeFakeTsrs(path.join(root, 'node_modules'));
+	const plan = resolveServer({ projectDir: root, ...tsdk('node_modules/tsrs') });
+	assert.equal(fs.realpathSync(plan.command), fs.realpathSync(binary));
+});
+
+test("TYPESCRIPT_NATIVE_LSP_TSDK may name tsrs's tsdk directory or its platform package, as tsrs's editor setup does", () => {
+	const root = tempDir();
+	const binary = writeFakeTsrs(path.join(root, 'node_modules'));
+	fs.mkdirSync(path.join(root, 'node_modules', 'tsrs', 'tsdk'));
+	assert.equal(fs.realpathSync(resolveServer({ projectDir: root, ...tsdk('node_modules/tsrs/tsdk') }).command), fs.realpathSync(binary));
+	assert.equal(resolveServer({ projectDir: root, ...tsdk(path.dirname(binary)) }).command, binary);
+});
+
+test('an installed tsrs is not used unless TYPESCRIPT_NATIVE_LSP_TSDK names it', () => {
+	const root = tempDir();
+	writeFakeTypescript(path.join(root, 'node_modules', 'typescript'), '7.0.2');
+	writeFakeTsrs(path.join(root, 'node_modules'));
+	const plan = resolveServer({ projectDir: root, ...hermetic });
+	assert.equal(plan.typescript?.version, '7.0.2');
+	assert.equal(plan.tsrs, undefined);
+});
+
+test('a tsrs without a binary for this platform is an error naming the packages it looked for', () => {
+	const root = tempDir();
+	writeFakeTsrs(path.join(root, 'node_modules'), { binary: false });
+	assert.throws(() => resolveServer({ projectDir: root, ...tsdk('node_modules/tsrs') }), /none of @tsrs\/.* is installed/);
+});
+
+for (const libc of ['gnu', 'musl']) {
+	test(`on Linux with ${libc} the ${libc} build of tsrs wins when both are installed`, () => {
+		const root = tempDir();
+		const gnu = writeFakeTsrs(path.join(root, 'node_modules'), { platformPackage: 'linux-x64-gnu' });
+		const musl = writeFakeTsrs(path.join(root, 'node_modules'), { platformPackage: 'linux-x64-musl' });
+		const plan = resolveServer({ projectDir: root, ...tsdk('node_modules/tsrs'), platform: 'linux', arch: 'x64', musl: 'musl' === libc });
+		assert.equal(fs.realpathSync(plan.command), fs.realpathSync('musl' === libc ? musl : gnu));
+	});
+}
+
+test('on Windows tsrs runs as tsrs.exe', () => {
+	const root = tempDir();
+	const binary = writeFakeTsrs(path.join(root, 'node_modules'), { platformPackage: 'win32-x64' });
+	const plan = resolveServer({ projectDir: root, ...tsdk('node_modules/tsrs'), platform: 'win32', arch: 'x64' });
+	assert.equal(fs.realpathSync(plan.command), fs.realpathSync(binary));
+	assert.ok(plan.command.endsWith('tsrs.exe'), plan.command);
+});
+
+test('pnpm-style symlinked tsrs resolves the platform binary next to the real package', { skip: 'win32' === platform && 'symlink layout' }, () => {
+	const root = tempDir();
+	const store = path.join(root, 'node_modules', '.pnpm', 'tsrs@0.22.0', 'node_modules');
+	const binary = writeFakeTsrs(store);
+	fs.symlinkSync(path.join('.pnpm', 'tsrs@0.22.0', 'node_modules', 'tsrs'), path.join(root, 'node_modules', 'tsrs'));
+	const plan = resolveServer({ projectDir: root, ...tsdk('node_modules/tsrs') });
+	assert.equal(fs.realpathSync(plan.command), fs.realpathSync(binary));
+});
+
+test("TSRS_BINARY, tsrs's own variable for a local build, runs that build as an absolute path and says so", () => {
+	const root = tempDir();
+	writeFakeTsrs(path.join(root, 'node_modules'));
+	fs.mkdirSync(path.join(root, 'target', 'debug'), { recursive: true });
+	fs.writeFileSync(path.join(root, 'target', 'debug', 'tsrs'), '');
+	const cwd = process.cwd();
+	process.chdir(root);
+	try {
+		const plan = resolveServer({ projectDir: root, ...hermetic, env: { ...hermetic.env, TYPESCRIPT_NATIVE_LSP_TSDK: 'node_modules/tsrs', TSRS_BINARY: path.join('target', 'debug', 'tsrs') } });
+		assert.equal(plan.command, path.join(fs.realpathSync(root), 'target', 'debug', 'tsrs'));
+		assert.match(plan.reason, /^tsrs from TSRS_BINARY/);
+		assert.throws(() => resolveServer({ projectDir: root, ...hermetic, env: { ...hermetic.env, TYPESCRIPT_NATIVE_LSP_TSDK: 'node_modules/tsrs', TSRS_BINARY: 'missing' } }), /TSRS_BINARY/);
+	} finally {
+		process.chdir(cwd);
+	}
+});
+
+test('the tsrs fixture resolves to its platform binary through TYPESCRIPT_NATIVE_LSP_TSDK', { skip: false === installed('tsrs') && 'run npm run fixtures' }, () => {
+	const plan = resolveServer({ projectDir: fixture('tsrs'), ...tsdk('node_modules/tsrs') });
+	assert.equal(plan.tsrs?.version, installedVersion('tsrs', 'tsrs'));
+	assert.ok(plan.command.includes(path.join('node_modules', '@tsrs')), plan.command);
 });

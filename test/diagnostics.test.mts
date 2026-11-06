@@ -9,6 +9,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { startSession, diagnosticsFor, type Diagnostics } from './helpers/lsp-session.mts';
+import { engineEnv } from './helpers/project.mts';
 
 const fixtures = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures');
 const FIXED = 'import { double } from "./index.js";\nexport const right: number = double(2);\n';
@@ -25,10 +26,10 @@ function hasCode(code: number): (message: Diagnostics) => boolean {
 	return message => message.params.diagnostics.some(d => d.code === code);
 }
 
-for (const name of ['ts7', 'ts6']) {
+for (const name of ['ts7', 'ts6', 'tsrs']) {
 	test(`${name}: opening a file with a type error pushes its diagnostics to the client`, { skip: false === installed(name) && 'run npm run fixtures' }, async () => {
 		const file = path.join(fixture(name), 'error.ts');
-		const session = startSession(fixture(name));
+		const session = startSession(fixture(name), { env: engineEnv(name) });
 		try {
 			await session.initialize();
 			session.openFile(file);
@@ -41,7 +42,7 @@ for (const name of ['ts7', 'ts6']) {
 
 	test(`${name}: fixing the file pushes an empty diagnostics set`, { skip: false === installed(name) && 'run npm run fixtures' }, async () => {
 		const file = path.join(fixture(name), 'error.ts');
-		const session = startSession(fixture(name));
+		const session = startSession(fixture(name), { env: engineEnv(name) });
 		try {
 			await session.initialize();
 			session.openFile(file);

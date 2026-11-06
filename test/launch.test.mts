@@ -7,6 +7,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import type { InitializeResult } from 'vscode-languageserver-protocol';
 import { startSession, hoverText } from './helpers/lsp-session.mts';
+import { engineEnv } from './helpers/project.mts';
 
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -26,7 +27,7 @@ function installed(name: string): boolean {
 function envFor(projectDir: string): NodeJS.ProcessEnv {
 	const env: NodeJS.ProcessEnv = { ...process.env, CLAUDE_PROJECT_DIR: projectDir };
 	for (const key of Object.keys(env)) {
-		if (key.startsWith('TYPESCRIPT_NATIVE_LSP_')) {
+		if (key.startsWith('TYPESCRIPT_NATIVE_LSP_') || 'TSRS_BINARY' === key) {
 			delete env[key];
 		}
 	}
@@ -34,8 +35,8 @@ function envFor(projectDir: string): NodeJS.ProcessEnv {
 	return env;
 }
 
-async function initialize(projectDir: string): Promise<{ result: InitializeResult; stderr: string }> {
-	const session = startSession(projectDir);
+async function initialize(projectDir: string, env: NodeJS.ProcessEnv = {}): Promise<{ result: InitializeResult; stderr: string }> {
+	const session = startSession(projectDir, { env });
 	try {
 		const message = await session.initialize();
 		assert.equal(message.error, undefined, JSON.stringify(message));
@@ -78,6 +79,13 @@ test('aliased project completes the initialize handshake with the native server'
 	assert.match(result.serverInfo?.version ?? '', /^7\./);
 });
 
+test('tsrs project completes the initialize handshake with tsrs', { skip: false === installed('tsrs') && 'run npm run fixtures' }, async () => {
+	const { result, stderr } = await initialize(fixture('tsrs'), engineEnv('tsrs'));
+	assert.match(result.serverInfo?.version ?? '', /^7\./);
+	assert.equal(result.capabilities.hoverProvider, true);
+	assert.match(stderr, /tsrs \S+ via TYPESCRIPT_NATIVE_LSP_TSDK/);
+});
+
 test('TypeScript 6 project completes the initialize handshake with typescript-language-server', { skip: false === installed('ts6') && 'run npm run fixtures' }, async () => {
 	const { result, stderr } = await initialize(fixture('ts6'));
 	assert.equal(result.capabilities.hoverProvider, true);
@@ -93,10 +101,10 @@ test('.lsp.json points Claude Code at the launcher the tests exercise', () => {
 	assert.deepEqual(Object.keys(lspConfig.extensionToLanguage).sort(), documented.sort());
 });
 
-for (const name of ['ts7', 'ts6']) {
+for (const name of ['ts7', 'ts6', 'tsrs']) {
 	/** The status is the server's own: typescript-language-server exits 0, TypeScript 7.0.2 exits 1 ("context canceled"). What matters is that the launcher ends with it. */
 	test(`${name}: shutdown and exit end the launcher with the server's status`, { skip: false === installed(name) && 'run npm run fixtures' }, async () => {
-		const session = startSession(fixture(name));
+		const session = startSession(fixture(name), { env: engineEnv(name) });
 		await session.initialize();
 		await session.request('shutdown');
 		session.notify('exit');
@@ -106,7 +114,7 @@ for (const name of ['ts7', 'ts6']) {
 	});
 
 	test(`${name}: a termination signal ends the launcher and its server`, { skip: (false === installed(name) && 'run npm run fixtures') || ('win32' === process.platform && 'POSIX signals') }, async () => {
-		const session = startSession(fixture(name));
+		const session = startSession(fixture(name), { env: engineEnv(name) });
 		await session.initialize();
 		session.child.kill('SIGTERM');
 		const { code, signal } = await session.exited();

@@ -14,7 +14,7 @@ import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import type { Location, LocationLink } from 'vscode-languageserver-protocol';
 import { startSession, diagnosticsFor, hoverText, uriOf, type Diagnostics, type Session } from './helpers/lsp-session.mts';
-import { fakeServerProject, missingFixture, tempProject, writeSource, sourcePath } from './helpers/project.mts';
+import { engineEnv, fakeServerProject, missingFixture, tempProject, writeSource, sourcePath } from './helpers/project.mts';
 
 const DEBUG = { TYPESCRIPT_NATIVE_LSP_DEBUG: '1' };
 const IDLE = { ...DEBUG, TYPESCRIPT_NATIVE_LSP_IDLE_SECONDS: '1' };
@@ -40,13 +40,13 @@ function countOf(text: string, session: Session): number {
 	return session.stderr.split(text).length - 1;
 }
 
-for (const engine of ['ts7', 'ts6']) {
+for (const engine of ['ts7', 'ts6', 'tsrs']) {
 	const skip = missingFixture(engine);
 
 	test(`${engine}: an idle server is stopped while the launcher stays, answers the next request as a new server, and is stopped again`, { skip }, async () => {
 		const root = tempProject(engine, { 'a.ts': 'export const a = 1;\n' });
 		const file = sourcePath(root, 'a.ts');
-		const session = startSession(root, { env: IDLE });
+		const session = startSession(root, { env: { ...IDLE, ...engineEnv(engine) } });
 		try {
 			await session.initialize();
 			session.openFile(file);
@@ -65,7 +65,7 @@ for (const engine of ['ts7', 'ts6']) {
 		const root = tempProject(engine, { 'a.ts': 'export const a = 1;\n' });
 		const file = sourcePath(root, 'a.ts');
 		// An idle period shorter than the new server's cold start: it must not be stopped before it has reported the edit.
-		const session = startSession(root, { env: { ...DEBUG, TYPESCRIPT_NATIVE_LSP_IDLE_SECONDS: '0.3' } });
+		const session = startSession(root, { env: { ...DEBUG, TYPESCRIPT_NATIVE_LSP_IDLE_SECONDS: '0.3', ...engineEnv(engine) } });
 		try {
 			await session.initialize();
 			session.openFile(file);
@@ -91,7 +91,7 @@ for (const engine of ['ts7', 'ts6']) {
 	test(`${engine}: the new server gets the client's text of an open document, not the file on disk`, { skip }, async () => {
 		const root = tempProject(engine, { 'a.ts': 'export const a = 1;\n' });
 		const file = sourcePath(root, 'a.ts');
-		const session = startSession(root, { env: { ...IDLE, TYPESCRIPT_NATIVE_LSP_DOCUMENT_SYNC: '0' } });
+		const session = startSession(root, { env: { ...IDLE, TYPESCRIPT_NATIVE_LSP_DOCUMENT_SYNC: '0', ...engineEnv(engine) } });
 		try {
 			await session.initialize();
 			session.openFile(file, 'export const a = 2;\n');

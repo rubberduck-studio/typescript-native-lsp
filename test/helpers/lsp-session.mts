@@ -340,7 +340,7 @@ function isClientInfo(value: unknown): value is ClaudeCodeClient['clientInfo'] {
 function cleanEnv(): NodeJS.ProcessEnv {
 	const env = { ...process.env };
 	for (const key of Object.keys(env)) {
-		if (key.startsWith('TYPESCRIPT_NATIVE_LSP_')) {
+		if (key.startsWith('TYPESCRIPT_NATIVE_LSP_') || 'TSRS_BINARY' === key) {
 			delete env[key];
 		}
 	}

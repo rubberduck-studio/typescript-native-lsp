@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Runs [tsrs](https://github.com/oxc-project/tsrs), the Rust port of TypeScript 7, when `TYPESCRIPT_NATIVE_LSP_TSDK` points at it, for example `node_modules/tsrs` in a project's `.claude/settings.json` (#2). A relative path in that setting is now taken from the project directory. Diagnostics, document sync and idle shutdown work with tsrs as with TypeScript 7.
 - Fixes a failed restart after idle shutdown dropping the edits Claude Code made in the meantime: the next server served stale content, and TypeScript 7 crashed on the next edit of a file it had never seen opened. Diagnostics for those edits were lost too.
 - A restart now gives up on a server that does not answer within a minute instead of waiting forever, looks for the server again so an upgrade or branch switch while it was stopped is picked up, and no longer starts a server at the end of a session just to stop it.
 - A server that ignores the end of its input or a termination signal is killed instead of outliving the session, and idle shutdown no longer reads the server's responses when it is turned off.

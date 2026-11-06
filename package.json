@@ -10,7 +10,7 @@
   },
   "scripts": {
     "test": "node --test --test-timeout=180000 \"test/*.test.mts\"",
-    "fixtures": "npm install --prefix test/fixtures/ts7 && npm install --prefix test/fixtures/ts6 && npm install --prefix test/fixtures/aliased",
+    "fixtures": "npm install --prefix test/fixtures/ts7 && npm install --prefix test/fixtures/ts6 && npm install --prefix test/fixtures/tsrs && npm install --prefix test/fixtures/aliased",
     "typecheck": "tsc -p tsconfig.json",
     "version": "node tools/release-version.mts && git add .claude-plugin/plugin.json CHANGELOG.md"
   },

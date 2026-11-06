@@ -1,0 +1,7 @@
+{
+  "name": "fixture-tsrs",
+  "private": true,
+  "devDependencies": {
+    "tsrs": "0.22.0-ts7.1.0-beta"
+  }
+}
