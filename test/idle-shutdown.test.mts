@@ -64,7 +64,8 @@ for (const engine of ['ts7', 'ts6']) {
 	test(`${engine}: edits while the server is stopped reach the new one, with diagnostics`, { skip }, async () => {
 		const root = tempProject(engine, { 'a.ts': 'export const a = 1;\n' });
 		const file = sourcePath(root, 'a.ts');
-		const session = startSession(root, { env: IDLE });
+		// An idle period shorter than the new server's cold start: it must not be stopped before it has reported the edit.
+		const session = startSession(root, { env: { ...DEBUG, TYPESCRIPT_NATIVE_LSP_IDLE_SECONDS: '0.3' } });
 		try {
 			await session.initialize();
 			session.openFile(file);

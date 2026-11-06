@@ -60,10 +60,12 @@ export interface ProxyOptions {
 	debug?: boolean;
 	/** See ServerOptions.idleMs. */
 	idleMs: number;
+	/** See ServerOptions.pushesDiagnostics. */
+	pushesDiagnostics: boolean;
 	features: FeatureFactory[];
 }
 
-export function runProxy({ command, args, log, debug = false, idleMs, features }: ProxyOptions): void {
+export function runProxy({ command, args, log, debug = false, idleMs, pushesDiagnostics, features }: ProxyOptions): void {
 	const trace = debug ? log : () => {};
 	const listeners: { [E in keyof ProxyEvents]: Array<(payload: ProxyEvents[E]) => void> } = { changed: [], closed: [], restart: [], shutdown: [] };
 	let nextId = 0;
@@ -73,6 +75,7 @@ export function runProxy({ command, args, log, debug = false, idleMs, features }
 		command,
 		args,
 		idleMs,
+		pushesDiagnostics,
 		output: process.stdout,
 		log,
 		trace,

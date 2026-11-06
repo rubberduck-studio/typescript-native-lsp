@@ -61,7 +61,7 @@ log(`launching ${plan.command} ${plan.args.join(' ')}`);
 
 if (features.length > 0 || idleSeconds > 0) {
 	const { runProxy } = await import('./proxy.mts');
-	runProxy({ command: plan.command, args: plan.args, log, debug: '1' === process.env.TYPESCRIPT_NATIVE_LSP_DEBUG, idleMs: idleSeconds * 1000, features: await loadFeatures(features) });
+	runProxy({ command: plan.command, args: plan.args, log, debug: '1' === process.env.TYPESCRIPT_NATIVE_LSP_DEBUG, idleMs: idleSeconds * 1000, pushesDiagnostics: false === plan.native, features: await loadFeatures(features) });
 } else {
 	launchDirectly(plan);
 }

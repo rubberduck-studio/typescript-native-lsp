@@ -12,11 +12,13 @@
  * a cold start.
  *
  * Activity is what the client sends, including what the proxy's features send on
- * its behalf, and the server's answers to it. Messages a server sends on its own
- * do not count: servers log and report progress unprompted (TypeScript's native
- * server logs every file watcher event), and counting that would keep a server
- * running forever in a busy repository. A request unanswered for five minutes is
- * taken as abandoned, since Claude Code gives up on requests after 60 seconds.
+ * its behalf, and the server's answers to it: responses to requests, and for a
+ * server that pushes diagnostics, its diagnostics for a document after the
+ * document was opened or changed. Messages a server sends on its own do not
+ * count: servers log and report progress unprompted (TypeScript's native server
+ * logs every file watcher event), and counting that would keep a server running
+ * forever in a busy repository. An answer still missing after five minutes is
+ * taken as never coming, since Claude Code gives up on requests after 60 seconds.
  *
  * TODO(upstream): drop the idle handling (the stop, the record of open documents
  * and the replay) once Claude Code stops idle language servers itself
@@ -85,6 +87,8 @@ export interface ServerOptions {
 	args: string[];
 	/** Stop the server after this many milliseconds of inactivity; 0 keeps it running until the session ends. */
 	idleMs: number;
+	/** The server publishes a document's diagnostics on its own after the document is opened or changed. */
+	pushesDiagnostics: boolean;
 	/** Where the server's messages for the client go. */
 	output: Pick<Writable, 'write'>;
 	log(message: string): void;
@@ -107,11 +111,13 @@ export interface Server {
 }
 
 export function startServer(options: ServerOptions): Server {
-	const { command, args, idleMs, output, log, trace } = options;
+	const { command, args, idleMs, pushesDiagnostics, output, log, trace } = options;
 	const documents = new Map<string, OpenDocument>();
 	const queue: Queued[] = [];
 	/** Requests the current server has not answered yet, with the time each was sent. */
 	const outstanding = new Map<RequestId, number>();
+	/** Documents whose diagnostics a pushing server owes after an open or change, keyed by documentKey, with the time of the change. */
+	const awaitingDiagnostics = new Map<string, number>();
 	let initializeParams: InitializeParams | null = null;
 	let configuration: Message | null = null;
 	let state: State = 'running';
@@ -239,13 +245,16 @@ export function startServer(options: ServerOptions): Server {
 
 	function fromServer(frame: Buffer, parse: () => Message): void {
 		const own = frame.includes(ID_PREFIX);
-		if (false === own && 0 === outstanding.size) {
+		const diagnostics = awaitingDiagnostics.size > 0 && frame.includes('textDocument/publishDiagnostics');
+		if (false === own && false === diagnostics && 0 === outstanding.size) {
 			output.write(frame);
 			return;
 		}
 		const message = parse();
 		if (undefined === message.method && undefined !== message.id && null !== message.id) {
 			answered(message.id);
+		} else if (isMethod(message, 'textDocument/publishDiagnostics')) {
+			published(message.params.uri);
 		}
 		if (false === own || 'string' !== typeof message.id || false === message.id.startsWith(ID_PREFIX)) {
 			output.write(frame);
@@ -265,6 +274,7 @@ export function startServer(options: ServerOptions): Server {
 		}
 		child = null;
 		outstanding.clear();
+		awaitingDiagnostics.clear();
 		clearTimers();
 		if ('signal' === ending || 'running' === state) {
 			if (null !== signal) {
@@ -294,6 +304,11 @@ export function startServer(options: ServerOptions): Server {
 		if (isRequest(message)) {
 			outstanding.set(message.id, performance.now());
 		}
+		if (isMethod(message, 'textDocument/didOpen') || isMethod(message, 'textDocument/didChange')) {
+			awaitDiagnostics(message.params.textDocument.uri);
+		} else if (isMethod(message, 'textDocument/didClose')) {
+			awaitingDiagnostics.delete(documentKey(message.params.textDocument.uri));
+		}
 		if (undefined === frame) {
 			writeMessage(server.stdin, message);
 		} else {
@@ -302,7 +317,26 @@ export function startServer(options: ServerOptions): Server {
 	}
 
 	function answered(id: RequestId): void {
-		if (outstanding.delete(id) && 0 === outstanding.size) {
+		if (outstanding.delete(id)) {
+			settle();
+		}
+	}
+
+	function awaitDiagnostics(uri: string): void {
+		if (pushesDiagnostics) {
+			awaitingDiagnostics.set(documentKey(uri), performance.now());
+		}
+	}
+
+	function published(uri: string): void {
+		if (awaitingDiagnostics.delete(documentKey(uri))) {
+			settle();
+		}
+	}
+
+	/** The server has answered everything it owed: the idle period starts now. */
+	function settle(): void {
+		if (0 === outstanding.size && 0 === awaitingDiagnostics.size) {
 			lastActivity = performance.now();
 		}
 	}
@@ -343,7 +377,13 @@ export function startServer(options: ServerOptions): Server {
 				answered(id);
 			}
 		}
-		if (outstanding.size > 0) {
+		for (const [key, changedAt] of awaitingDiagnostics) {
+			if (now - changedAt > ABANDONED_MS) {
+				awaitingDiagnostics.delete(key);
+				settle();
+			}
+		}
+		if (outstanding.size > 0 || awaitingDiagnostics.size > 0) {
 			armIdleTimer(idleMs);
 			return;
 		}
@@ -426,6 +466,7 @@ export function startServer(options: ServerOptions): Server {
 		}
 		for (const [uri, { languageId, version, text }] of documents) {
 			writeMessage(server.stdin, methodMessage('textDocument/didOpen', { textDocument: { uri, languageId, version, text: text ?? readText(uri) } }));
+			awaitDiagnostics(uri);
 		}
 		trace(`reopened ${documents.size} document(s)`);
 		state = 'running';
@@ -513,6 +554,16 @@ function isDocumentNotification(message: Message): boolean {
 function fullText(contentChanges: TextDocumentContentChangeEvent[]): string | null {
 	const last = contentChanges.at(-1);
 	return undefined !== last && false === 'range' in last ? last.text : null;
+}
+
+/** Identifies a document across the spellings client and server may use for its URI (percent-encoding, drive-letter case). */
+function documentKey(uri: string): string {
+	try {
+		const file = fileURLToPath(uri);
+		return 'win32' === process.platform ? file.toLowerCase() : file;
+	} catch {
+		return uri;
+	}
 }
 
 function readText(uri: string): string {
