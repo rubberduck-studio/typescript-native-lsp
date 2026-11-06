@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Fixes a failed restart after idle shutdown dropping the edits Claude Code made in the meantime: the next server served stale content, and TypeScript 7 crashed on the next edit of a file it had never seen opened. Diagnostics for those edits were lost too.
+- A restart now gives up on a server that does not answer within a minute instead of waiting forever, looks for the server again so an upgrade or branch switch while it was stopped is picked up, and no longer starts a server at the end of a session just to stop it.
+- A server that ignores the end of its input or a termination signal is killed instead of outliving the session, and idle shutdown no longer reads the server's responses when it is turned off.
+- The `document_sync` and `diagnostics_bridge` options also accept yes/no and on/off.
+
 ## 2.0.0
 
 - Stops the server after 10 minutes without activity from Claude Code and starts it again, with the same open files, when Claude next needs it. Claude Code keeps language servers running until the session ends, and TypeScript's servers hold on to every project they loaded, several GB per session on a large repository. The first request after a stop is a cold start, about a second on a 4,700-file repository.

@@ -44,7 +44,7 @@ The last line matters. When two enabled plugins claim the same file extension, C
 
 ### Options
 
-Change these in `/config`, with `/plugin configure typescript-native-lsp@typescript-native-lsp`, or at install with `claude plugin install … --config <option>=<value>`. They apply to every project.
+Change these in `/config`, with `/plugin configure typescript-native-lsp@typescript-native-lsp`, or at install with `claude plugin install … --config <option>=<value>`. They apply to every project. Every option has a default, so installing prints that the options are not yet set and an interactive install shows them in a dialog; leaving them as they are is fine.
 
 | Option | Default | What it does |
 | --- | --- | --- |
@@ -80,7 +80,7 @@ claude plugin list --json   # note the installPath of typescript-native-lsp
 node <installPath>/scripts/launch.mjs --resolve
 ```
 
-A clone of this repository works the same way: `node scripts/launch.mjs --resolve` from inside the project directory. Run from a shell, it shows the options at their defaults; the values set in Claude Code only reach the launcher when Claude Code starts it.
+A clone of this repository works the same way: `node scripts/launch.mjs --resolve` from inside the project directory. Run from a shell, it shows the options as your shell's environment sets them, normally their defaults; the values set in Claude Code only reach the launcher when Claude Code starts it.
 
 If a project's TypeScript 7 is somewhere the launcher does not look, point `TYPESCRIPT_NATIVE_LSP_TSDK` at the package directory, for example `/path/to/node_modules/typescript`, in the shell that starts Claude Code. The override applies to TypeScript 7 or newer; typescript-language-server finds TypeScript 6 and older on its own.
 
@@ -110,7 +110,7 @@ Claude Code keeps a language server running from its first request until the ses
 
 So the proxy stops the server once Claude Code has sent nothing for 10 minutes and no request is waiting for an answer, and starts a new one when Claude next needs it: on the next request, or on the next edit, so that the edit's type errors are still reported. The new server gets the session's original settings and every file the old one had open, with the same content, so answers continue where they left off. The cost is a cold start on that first request: about a second for a hover on a repository of 4,700 TypeScript files, well inside Claude Code's 60-second request limit. An edit that wakes the server waits for that cold start too, so its type errors are more likely to reach the conversation a tool call later than usual (see Limitations). Activity means what Claude Code sends and the server's answers to it. The server's own log and progress messages do not count, or a server watching a busy repository would never be stopped.
 
-The idle period is the `idle_shutdown_seconds` option (see [Options](#options)). If the server cannot be started again, for example while `node_modules` is being reinstalled, the request fails in a way Claude Code retries, and the next request tries again.
+The idle period is the `idle_shutdown_seconds` option (see [Options](#options)). Each restart looks for the server again, so a TypeScript upgrade or branch switch while the server was stopped is picked up; when the project switched between TypeScript 7 and 6, the launcher ends and Claude Code starts it again with the right setup. If the server cannot be started, for example while `node_modules` is being reinstalled or when it does not answer within a minute, the request fails in a way Claude Code retries, and the next request tries again.
 
 ## Git worktrees
 
