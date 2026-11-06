@@ -9,7 +9,10 @@ import fs from 'node:fs';
 
 const MANIFEST = '.claude-plugin/plugin.json';
 const CHANGELOG = 'CHANGELOG.md';
-const UNRELEASED = '## Unreleased\n\n- ';
+/** The heading, then entries (a list item or a subheading), with either line ending. */
+const UNRELEASED = /^## Unreleased(\r?\n)(?=\s*\S)/m;
+/** The heading followed by nothing but the next release's heading or the end of the file. */
+const NOTHING_UNRELEASED = /^## Unreleased\r?\n\s*(?:## |(?![\s\S]))/m;
 const VERSION_FIELD = /"version": "[^"]*"/;
 
 const version = process.env.npm_package_version;
@@ -22,8 +25,8 @@ const changelog = fs.readFileSync(CHANGELOG, 'utf8');
 if (false === VERSION_FIELD.test(manifest)) {
 	throw new Error(`${MANIFEST} has no version field`);
 }
-if (false === changelog.includes(UNRELEASED)) {
+if (false === UNRELEASED.test(changelog) || NOTHING_UNRELEASED.test(changelog)) {
 	throw new Error(`${CHANGELOG} has no entries under "## Unreleased" to release`);
 }
 fs.writeFileSync(MANIFEST, manifest.replace(VERSION_FIELD, `"version": "${version}"`));
-fs.writeFileSync(CHANGELOG, changelog.replace(UNRELEASED, `## ${version}\n\n- `));
+fs.writeFileSync(CHANGELOG, changelog.replace(UNRELEASED, `## ${version}$1`));
