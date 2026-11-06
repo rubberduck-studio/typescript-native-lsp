@@ -1,3 +1,4 @@
+import { after } from 'node:test';
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
@@ -57,7 +58,7 @@ export interface Session {
 	openFile(filePath: string, text?: string): void;
 	changeFile(filePath: string, version: number, text: string): void;
 	/** Resolves once the launcher process has exited, with its exit code and signal. */
-	exited(): Promise<Exit>;
+	exited(options?: { timeoutMs?: number }): Promise<Exit>;
 	/** Ends the session the way a client does: close stdin, give the launcher time to exit with its server, kill only if it does not. */
 	close(): Promise<void>;
 }
@@ -69,12 +70,29 @@ export interface Session {
  * server sent, and a way to wait for a notification matching a predicate.
  * Server-to-client requests are answered with null, as Claude Code does.
  */
+/**
+ * Every launcher a test started and that has not exited. A test that times out
+ * never reaches its own cleanup, so whatever is left is killed when the test
+ * file ends; otherwise its open pipes would keep the file from finishing.
+ */
+const launched = new Set<ChildProcessWithoutNullStreams>();
+after(() => {
+	for (const child of launched) {
+		child.kill('SIGKILL');
+		// The server may outlive the launcher and keep the inherited pipes open.
+		child.stdout.destroy();
+		child.stderr.destroy();
+	}
+});
+
 export function startSession(projectDir: string, { env = {}, capabilities = claudeCodeClient.capabilities }: SessionOptions = {}): Session {
 	const child = spawn(process.execPath, [launcher], {
 		cwd: projectDir,
 		env: { ...cleanEnv(), CLAUDE_PROJECT_DIR: projectDir, TYPESCRIPT_NATIVE_LSP_GLOBAL_ROOTS: '', ...env },
 		stdio: ['pipe', 'pipe', 'pipe'],
 	});
+	launched.add(child);
+	child.once('exit', () => launched.delete(child));
 	child.stdin.on('error', () => {});
 	let buffer = Buffer.alloc(0);
 	let stderr = '';
@@ -239,13 +257,17 @@ export function startSession(projectDir: string, { env = {}, capabilities = clau
 		changeFile(filePath, version, text) {
 			session.notify('textDocument/didChange', { textDocument: { uri: pathToFileURL(filePath).href, version }, contentChanges: [{ text }] });
 		},
-		exited() {
-			return new Promise(resolve => {
+		exited({ timeoutMs = 20000 } = {}) {
+			return new Promise((resolve, reject) => {
 				if (null !== child.exitCode || null !== child.signalCode) {
 					resolve({ code: child.exitCode, signal: child.signalCode });
 					return;
 				}
-				child.once('exit', (code, signal) => resolve({ code, signal }));
+				const timer = setTimeout(() => reject(new Error(`the launcher did not exit within ${timeoutMs}ms\nstderr:\n${stderr}`)), timeoutMs);
+				child.once('exit', (code, signal) => {
+					clearTimeout(timer);
+					resolve({ code, signal });
+				});
 			});
 		},
 		async close() {

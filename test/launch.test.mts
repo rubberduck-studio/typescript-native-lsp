@@ -193,6 +193,10 @@ test('with idle shutdown and both features off, the server runs directly and sti
 		session.openFile(file);
 		assert.notEqual(await hoverText(session, file, 0, 13), '');
 		assert.doesNotMatch(session.stderr, /idle shutdown after|document sync on|diagnostics bridge on/);
+		if ('win32' !== process.platform) {
+			const running = spawnSync('ps', ['-o', 'command=', '-p', String(session.child.pid)], { encoding: 'utf8' }).stdout;
+			assert.match(running, /tsc --lsp --stdio/, 'the launcher should have replaced itself with the server');
+		}
 	} finally {
 		await session.close();
 	}

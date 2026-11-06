@@ -214,9 +214,10 @@ test('a server that cannot be started again fails the request with ContentModifi
 	}
 });
 
-test('a server whose own child keeps its output open still counts as stopped once it exits', async () => {
+// On Windows the holder does not keep the server's output open, so the test would prove nothing there.
+test('a server whose own child keeps its output open still counts as stopped once it exits', { skip: 'win32' === process.platform && 'the pipe is not held on Windows' }, async () => {
 	const { root, file, env } = fakeServerProject('fake-server.mjs');
-	const session = startSession(root, { env: { ...env, ...IDLE, FAKE_PIPE_HOLDER_MS: '20000' } });
+	const session = startSession(root, { env: { ...env, ...IDLE, FAKE_PIPE_HOLDER_MS: '8000' } });
 	try {
 		await session.initialize();
 		session.openFile(file);

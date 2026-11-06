@@ -2,7 +2,7 @@ import { after } from 'node:test';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const helpers = path.dirname(fileURLToPath(import.meta.url));
 const fixtures = path.join(helpers, '..', 'fixtures');
@@ -49,19 +49,30 @@ export function sourcePath(root: string, name: string): string {
 
 /**
  * A throwaway project whose "TypeScript 7" is one of the fake servers in this
- * directory: the launcher finds a typescript package without a platform binary
- * and runs its lib/tsc.js with node, which is the fake. `server` is the fake's
- * path, so a test can remove it to make a restart fail. Pass `env` to the
- * session; it keeps the launcher from finding anything on PATH.
+ * directory. By default the launcher finds a typescript package without a
+ * platform binary and runs its lib/tsc.js with node, which is the fake. With
+ * `binary`, POSIX only, the fake is also installed as the platform package's
+ * native binary, a script that runs node on it, so the launcher starts it
+ * directly. `server` is the file the launcher will start, so a test can remove or
+ * break it to make a restart fail. Pass `env` to the session; it keeps the
+ * launcher from finding anything on PATH.
  */
-export function fakeServerProject(fake: string): { root: string; file: string; server: string; env: NodeJS.ProcessEnv } {
+export function fakeServerProject(fake: string, { binary = false }: { binary?: boolean } = {}): { root: string; file: string; server: string; env: NodeJS.ProcessEnv } {
 	const root = fs.mkdtempSync(path.join(os.tmpdir(), 'typescript-native-lsp-fake-'));
 	tempDirs.push(root);
 	const pkg = path.join(root, 'node_modules', 'typescript');
 	fs.mkdirSync(path.join(pkg, 'lib'), { recursive: true });
 	fs.writeFileSync(path.join(pkg, 'package.json'), JSON.stringify({ name: 'typescript', version: '7.0.2' }));
-	const server = path.join(pkg, 'lib', 'tsc.js');
-	fs.copyFileSync(path.join(helpers, fake), server);
+	const script = path.join(pkg, 'lib', 'tsc.js');
+	fs.copyFileSync(path.join(helpers, fake), script);
+	let server = script;
+	if (binary) {
+		const platformPackage = path.join(root, 'node_modules', '@typescript', `typescript-${process.platform}-${process.arch}`);
+		fs.mkdirSync(path.join(platformPackage, 'lib'), { recursive: true });
+		fs.writeFileSync(path.join(platformPackage, 'package.json'), JSON.stringify({ name: `@typescript/typescript-${process.platform}-${process.arch}`, version: '7.0.2' }));
+		server = path.join(platformPackage, 'lib', 'tsc');
+		fs.writeFileSync(server, `#!${process.execPath}\nimport(${JSON.stringify(pathToFileURL(script).href)});\n`, { mode: 0o755 });
+	}
 	fs.writeFileSync(path.join(root, 'a.ts'), 'export const a = 1;\n');
 	return { root, file: path.join(root, 'a.ts'), server, env: { PATH: '' } };
 }
