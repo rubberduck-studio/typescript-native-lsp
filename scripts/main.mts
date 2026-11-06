@@ -26,12 +26,11 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { resolveServer, ResolveError, type Plan } from './resolve.mts';
 import type { FeatureFactory } from './proxy.mts';
-import { exitStatus } from './server.mts';
+import { exitStatus, terminate } from './server.mts';
 
 type FeatureName = 'document-sync' | 'diagnostics-bridge';
 
 const DEFAULT_IDLE_SECONDS = 600;
-const KILL_GRACE_MS = 2000;
 const SIGNALS: NodeJS.Signals[] = ['SIGINT', 'SIGTERM', 'SIGHUP'];
 
 const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
@@ -61,7 +60,18 @@ log(`launching ${plan.command} ${plan.args.join(' ')}`);
 
 if (features.length > 0 || idleSeconds > 0) {
 	const { runProxy } = await import('./proxy.mts');
-	runProxy({ command: plan.command, args: plan.args, log, debug: '1' === process.env.TYPESCRIPT_NATIVE_LSP_DEBUG, idleMs: idleSeconds * 1000, pushesDiagnostics: false === plan.native, features: await loadFeatures(features) });
+	runProxy({
+		server: plan,
+		resolveServer: () => {
+			const next = resolveServer({ projectDir, globalRoots });
+			log(next.reason);
+			return next;
+		},
+		log,
+		debug: '1' === process.env.TYPESCRIPT_NATIVE_LSP_DEBUG,
+		idleMs: idleSeconds * 1000,
+		features: await loadFeatures(features),
+	});
 } else {
 	launchDirectly(plan);
 }
@@ -128,10 +138,7 @@ function launchDirectly({ command, args }: Plan): void {
 
 	const child = spawn(command, args, { stdio: 'inherit', windowsHide: true });
 	for (const signal of SIGNALS) {
-		process.on(signal, () => {
-			child.kill(signal);
-			setTimeout(() => child.kill('SIGKILL'), KILL_GRACE_MS).unref();
-		});
+		process.on(signal, () => terminate(child, signal));
 	}
 	child.on('error', error => {
 		log(`failed to start ${command}: ${error.message}`);

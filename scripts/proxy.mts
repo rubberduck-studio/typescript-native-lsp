@@ -9,7 +9,7 @@
  * execs the server directly.
  */
 import { ID_PREFIX, createFrameReader, writeMessage, type Message } from './protocol.mts';
-import { startServer } from './server.mts';
+import { startServer, type ServerCommand } from './server.mts';
 
 const SIGNALS: NodeJS.Signals[] = ['SIGINT', 'SIGTERM', 'SIGHUP'];
 const EXIT_GRACE_MS = 5000;
@@ -54,28 +54,27 @@ export interface Feature {
 export type FeatureFactory = (ctx: ProxyContext) => Feature;
 
 export interface ProxyOptions {
-	command: string;
-	args: string[];
+	/** See ServerOptions.server. */
+	server: ServerCommand;
+	/** See ServerOptions.resolveServer. */
+	resolveServer(): ServerCommand;
 	log(message: string): void;
 	debug?: boolean;
 	/** See ServerOptions.idleMs. */
 	idleMs: number;
-	/** See ServerOptions.pushesDiagnostics. */
-	pushesDiagnostics: boolean;
 	features: FeatureFactory[];
 }
 
-export function runProxy({ command, args, log, debug = false, idleMs, pushesDiagnostics, features }: ProxyOptions): void {
+export function runProxy({ server: first, resolveServer, log, debug = false, idleMs, features }: ProxyOptions): void {
 	const trace = debug ? log : () => {};
 	const listeners: { [E in keyof ProxyEvents]: Array<(payload: ProxyEvents[E]) => void> } = { changed: [], closed: [], restart: [], shutdown: [] };
 	let nextId = 0;
 	let finished = false;
 
 	const server = startServer({
-		command,
-		args,
+		server: first,
+		resolveServer,
 		idleMs,
-		pushesDiagnostics,
 		output: process.stdout,
 		log,
 		trace,

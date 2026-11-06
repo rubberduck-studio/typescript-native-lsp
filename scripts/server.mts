@@ -38,11 +38,18 @@
  * - Responses to requests of the stopped server are dropped.
  * - The client's shutdown is answered by the proxy, and its exit (or the end of
  *   its input) ends the proxy, without starting a server just to stop it.
- * - A server that cannot be started again (its files gone after a reinstall or a
- *   branch switch) leaves the proxy running: the queued requests are answered
- *   with ContentModified, which Claude Code retries, and the next one tries again.
+ *
+ * Each restart resolves the server again, so a reinstall or branch switch while
+ * the server was stopped is picked up. A server that cannot be started (its files
+ * gone in the middle of a reinstall, or one that does not answer initialize
+ * within a minute) leaves the proxy running: queued document changes go into the
+ * record, queued requests are answered with ContentModified, which Claude Code
+ * retries, and the next request tries again. When the project now needs the other
+ * kind of server (TypeScript 7 instead of 6 or back), the proxy ends with a
+ * failure status instead, so Claude Code starts the launcher again with the
+ * features that server needs.
  */
-import { spawn, type ChildProcessByStdio } from 'node:child_process';
+import { spawn, type ChildProcess, type ChildProcessByStdio } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import type { Readable, Writable } from 'node:stream';
@@ -51,6 +58,8 @@ import type { InitializeParams, TextDocumentContentChangeEvent } from 'vscode-la
 import { createFrameReader, ID_PREFIX, isMethod, methodMessage, writeMessage, type Message } from './protocol.mts';
 
 const GRACE_MS = 2000;
+/** As long as Claude Code waits for a language server to start (startupTimeout in .lsp.json). */
+const STARTUP_TIMEOUT_MS = 60 * 1000;
 const ABANDONED_MS = 5 * 60 * 1000;
 /** The longest delay Node's timers accept; longer ones fire at once. */
 const MAX_TIMER_MS = 2 ** 31 - 1;
@@ -82,13 +91,20 @@ interface Queued {
 	frame: Buffer | undefined;
 }
 
-export interface ServerOptions {
+export interface ServerCommand {
 	command: string;
 	args: string[];
+	/** TypeScript's own language server (7 or newer), which serves diagnostics on request; otherwise one that publishes them on its own after a change, as typescript-language-server does. */
+	native: boolean;
+}
+
+export interface ServerOptions {
+	/** The server to start first. */
+	server: ServerCommand;
+	/** Resolves the server again for a restart. Throws when there is none. */
+	resolveServer(): ServerCommand;
 	/** Stop the server after this many milliseconds of inactivity; 0 keeps it running until the session ends. */
 	idleMs: number;
-	/** The server publishes a document's diagnostics on its own after the document is opened or changed. */
-	pushesDiagnostics: boolean;
 	/** Where the server's messages for the client go. */
 	output: Pick<Writable, 'write'>;
 	log(message: string): void;
@@ -111,7 +127,11 @@ export interface Server {
 }
 
 export function startServer(options: ServerOptions): Server {
-	const { command, args, idleMs, pushesDiagnostics, output, log, trace } = options;
+	const { idleMs, output, log, trace } = options;
+	let { command, args } = options.server;
+	const { native } = options.server;
+	/** Whether to wait for the diagnostics a server publishes on its own before counting it idle. */
+	const pushesDiagnostics = false === native;
 	const documents = new Map<string, OpenDocument>();
 	const queue: Queued[] = [];
 	/** Requests the current server has not answered yet, with the time each was sent. */
@@ -131,6 +151,7 @@ export function startServer(options: ServerOptions): Server {
 	let lastActivity = performance.now();
 	let idleTimer: NodeJS.Timeout | null = null;
 	let graceTimer: NodeJS.Timeout | null = null;
+	let startupTimer: NodeJS.Timeout | null = null;
 	let pendingShutdown: string | null = null;
 	let pendingInitialize: string | null = null;
 	let nextId = 0;
@@ -184,16 +205,21 @@ export function startServer(options: ServerOptions): Server {
 			wake(wakes);
 		},
 		end() {
-			if ('running' === state) {
-				child?.stdin.end();
+			if ('running' !== state && 'starting' !== state) {
+				clientEnded();
 				return;
 			}
 			if ('starting' === state) {
 				ending ??= 'exit';
-				child?.stdin.end();
-				return;
 			}
-			clientEnded();
+			const server = child;
+			server?.stdin.end();
+			// A server that ignores the end of its input is ended the hard way.
+			setTimeout(() => {
+				if (null !== server) {
+					terminate(server);
+				}
+			}, GRACE_MS).unref();
 		},
 		kill(signal) {
 			ending = 'signal';
@@ -201,14 +227,13 @@ export function startServer(options: ServerOptions): Server {
 				finish(exitStatus(null, signal));
 				return;
 			}
-			const server = child;
-			server.kill(signal);
-			setTimeout(() => server.kill('SIGKILL'), GRACE_MS).unref();
+			terminate(child, signal);
 		},
 	};
 
 	function spawnServer(): ServerProcess {
 		const server = spawn(command, args, { stdio: ['pipe', 'pipe', 'inherit'], windowsHide: true });
+		server.on('spawn', () => trace(`server started: ${command}`));
 		const reader = createFrameReader((frame, parse) => fromServer(frame, parse));
 		server.stdin.on('error', () => {});
 		server.stdout.on('data', (chunk: Buffer) => {
@@ -217,7 +242,7 @@ export function startServer(options: ServerOptions): Server {
 			} catch (error) {
 				log(`protocol error from the server: ${error instanceof Error ? error.message : String(error)}`);
 				finish(1);
-				server.kill('SIGTERM');
+				terminate(server);
 			}
 		});
 		server.on('error', error => {
@@ -301,7 +326,7 @@ export function startServer(options: ServerOptions): Server {
 	/** Writes a message to a running server, keeping the record of open documents and of unanswered requests. */
 	function write(server: ServerProcess, message: Message, frame: Buffer | undefined): void {
 		record(message);
-		if (isRequest(message)) {
+		if (idleMs > 0 && isRequest(message)) {
 			outstanding.set(message.id, performance.now());
 		}
 		if (isMethod(message, 'textDocument/didOpen') || isMethod(message, 'textDocument/didChange')) {
@@ -323,7 +348,7 @@ export function startServer(options: ServerOptions): Server {
 	}
 
 	function awaitDiagnostics(uri: string): void {
-		if (pushesDiagnostics) {
+		if (idleMs > 0 && pushesDiagnostics) {
 			awaitingDiagnostics.set(documentKey(uri), performance.now());
 		}
 	}
@@ -372,15 +397,15 @@ export function startServer(options: ServerOptions): Server {
 			return;
 		}
 		const now = performance.now();
+		// An answer that never came is no activity: dropping it leaves the idle clock where it was.
 		for (const [id, sentAt] of outstanding) {
 			if (now - sentAt > ABANDONED_MS) {
-				answered(id);
+				outstanding.delete(id);
 			}
 		}
 		for (const [key, changedAt] of awaitingDiagnostics) {
 			if (now - changedAt > ABANDONED_MS) {
 				awaitingDiagnostics.delete(key);
-				settle();
 			}
 		}
 		if (outstanding.size > 0 || awaitingDiagnostics.size > 0) {
@@ -414,8 +439,8 @@ export function startServer(options: ServerOptions): Server {
 		writeMessage(server.stdin, { jsonrpc: '2.0', method: 'exit' });
 		server.stdin.end();
 		graceTimer = setTimeout(() => {
-			server.kill('SIGTERM');
-			graceTimer = setTimeout(() => server.kill('SIGKILL'), GRACE_MS);
+			graceTimer = null;
+			terminate(server);
 		}, GRACE_MS);
 	}
 
@@ -438,6 +463,22 @@ export function startServer(options: ServerOptions): Server {
 		}
 		log('starting the server again');
 		state = 'starting';
+		let next: ServerCommand;
+		try {
+			next = options.resolveServer();
+		} catch (error) {
+			restartFailed(error instanceof Error ? error.message : String(error));
+			return;
+		}
+		if (next.native !== native) {
+			log(`the project now needs ${next.native ? "TypeScript's own server" : 'typescript-language-server'}; ending so that Claude Code starts the launcher again`);
+			finish(1);
+			return;
+		}
+		if (next.command !== command || next.args.join(' ') !== args.join(' ')) {
+			log(`the server moved: launching ${next.command} ${next.args.join(' ')}`);
+			({ command, args } = next);
+		}
 		let server: ServerProcess;
 		try {
 			server = spawnServer();
@@ -446,6 +487,7 @@ export function startServer(options: ServerOptions): Server {
 			return;
 		}
 		child = server;
+		startupTimer = setTimeout(() => restartFailed(`it did not answer initialize within ${formatDuration(STARTUP_TIMEOUT_MS)}`), STARTUP_TIMEOUT_MS);
 		pendingInitialize = lifecycleId();
 		writeMessage(server.stdin, methodMessage('initialize', initializeParams, pendingInitialize));
 	}
@@ -456,6 +498,8 @@ export function startServer(options: ServerOptions): Server {
 		if ('starting' !== state || null === server) {
 			return;
 		}
+		clearTimer(startupTimer);
+		startupTimer = null;
 		if (undefined !== response.error) {
 			restartFailed(`it rejected initialize: ${response.error.message}`);
 			return;
@@ -478,28 +522,51 @@ export function startServer(options: ServerOptions): Server {
 		armIdleTimer(idleMs);
 	}
 
-	/** Goes back to stopped after a failed restart and fails the queued requests in a way Claude Code retries. */
+	/** Goes back to stopped after a failed restart; queued requests are failed in a way Claude Code retries. */
 	function restartFailed(reason: string): void {
 		log(`could not start the server again: ${reason}`);
 		const server = child;
 		child = null;
 		pendingInitialize = null;
+		clearTimer(startupTimer);
+		startupTimer = null;
 		state = 'stopped';
-		server?.kill('SIGTERM');
-		failQueued(CONTENT_MODIFIED, 'the language server could not be started again; retry');
+		if (null !== server) {
+			terminate(server);
+		}
+		drainQueue({ code: CONTENT_MODIFIED, message: 'the language server could not be started again; retry' });
 	}
 
 	function answerShutdown(id: RequestId): void {
 		shutdownAnswered = true;
 		restartWanted = false;
-		failQueued(REQUEST_CANCELLED, 'the session is shutting down');
+		drainQueue({ code: REQUEST_CANCELLED, message: 'the session is shutting down' });
 		writeMessage(output, { jsonrpc: '2.0', id, result: null });
 	}
 
-	function failQueued(code: number, reason: string): void {
+	/**
+	 * Settles the queue without a server, in order: document changes go into the
+	 * record for the next server, requests get `error` (the proxy's own through its
+	 * features, so they can react), a queued shutdown or exit is handled as if no
+	 * server had been needed, and other notifications are dropped.
+	 */
+	function drainQueue(error: { code: number; message: string }): void {
 		for (const { message } of queue.splice(0)) {
-			if (isRequest(message)) {
-				writeMessage(output, { jsonrpc: '2.0', id: message.id, error: { code, message: reason } });
+			if (isDocumentNotification(message)) {
+				record(message);
+			} else if ('shutdown' === message.method && isRequest(message)) {
+				shutdownAnswered = true;
+				restartWanted = false;
+				writeMessage(output, { jsonrpc: '2.0', id: message.id, result: null });
+			} else if ('exit' === message.method) {
+				clientEnded();
+			} else if (isRequest(message)) {
+				const response: Message = { jsonrpc: '2.0', id: message.id, error };
+				if ('string' === typeof message.id && message.id.startsWith(ID_PREFIX)) {
+					options.onOwnResponse(response);
+				} else {
+					writeMessage(output, response);
+				}
 			}
 		}
 	}
@@ -515,23 +582,44 @@ export function startServer(options: ServerOptions): Server {
 	function finish(code: number): void {
 		clearTimers();
 		options.onExit(code);
-		const server = child;
-		if (null !== server && null === server.exitCode && null === server.signalCode) {
-			server.kill('SIGTERM');
-			setTimeout(() => server.kill('SIGKILL'), GRACE_MS).unref();
+		if (null !== child) {
+			terminate(child);
 		}
 	}
 
 	function clearTimers(): void {
 		clearTimer(idleTimer);
 		clearTimer(graceTimer);
+		clearTimer(startupTimer);
 		idleTimer = null;
 		graceTimer = null;
+		startupTimer = null;
 	}
 
 	function lifecycleId(): string {
 		return `${LIFECYCLE_PREFIX}${++nextId}`;
 	}
+}
+
+/**
+ * Ends a process with `signal`, then kills it outright if it is still running
+ * after a grace period. Windows has no POSIX signals and Node refuses most signal
+ * names there, so the process is simply terminated.
+ */
+export function terminate(server: Pick<ChildProcess, 'kill' | 'exitCode' | 'signalCode'>, signal: NodeJS.Signals = 'SIGTERM'): void {
+	if (null !== server.exitCode || null !== server.signalCode) {
+		return;
+	}
+	if ('win32' === process.platform) {
+		server.kill();
+		return;
+	}
+	server.kill(signal);
+	setTimeout(() => {
+		if (null === server.exitCode && null === server.signalCode) {
+			server.kill('SIGKILL');
+		}
+	}, GRACE_MS).unref();
 }
 
 /** The exit status a process should report for a child that ended with `code` or `signal`. */
