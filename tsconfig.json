@@ -15,5 +15,5 @@
     "allowImportingTsExtensions": true,
     "skipLibCheck": false
   },
-  "include": ["scripts/**/*.mts", "test/**/*.mts"]
+  "include": ["scripts/**/*.mts", "test/**/*.mts", "tools/**/*.mts"]
 }
