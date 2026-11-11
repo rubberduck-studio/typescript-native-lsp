@@ -17,6 +17,13 @@ interface ClaudeCodeClient {
 	capabilities: ClientCapabilities;
 }
 
+/**
+ * The initializationOptions of the plugin's .lsp.json, which Claude Code sends in
+ * `initialize` as they are; the captured payload below only shows what it sent
+ * for the configuration at the time of capture.
+ */
+const pluginInitializationOptions: unknown = JSON.parse(fs.readFileSync(path.join(here, '..', '..', '.lsp.json'), 'utf8')).typescript.initializationOptions ?? {};
+
 /** What Claude Code itself sends in `initialize`, so sessions here behave like the real client. */
 export const claudeCodeClient: ClaudeCodeClient = loadClaudeCodeClient();
 
@@ -242,7 +249,7 @@ export function startSession(projectDir: string, { env = {}, capabilities = clau
 			const response = await session.request('initialize', {
 				processId: process.pid,
 				clientInfo: claudeCodeClient.clientInfo,
-				initializationOptions: claudeCodeClient.initializationOptions,
+				initializationOptions: pluginInitializationOptions,
 				rootUri: pathToFileURL(projectDir).href,
 				rootPath: projectDir,
 				workspaceFolders: [{ uri: pathToFileURL(projectDir).href, name: path.basename(projectDir) }],
