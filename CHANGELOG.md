@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2.1.1
 
 - Fixes find-references, go-to-definition, hover and other navigation on TypeScript 6 and older returning answers from the open files only when asked right after a file was opened, which is how Claude Code asks: typescript-language-server's syntax server answered while the project was still loading (#3). It is now turned off, so those requests wait for the project, and each session runs one tsserver instead of two.
 
