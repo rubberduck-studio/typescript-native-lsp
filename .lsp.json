@@ -17,6 +17,11 @@
       "TYPESCRIPT_NATIVE_LSP_DOCUMENT_SYNC": "${user_config.document_sync}",
       "TYPESCRIPT_NATIVE_LSP_DIAGNOSTICS": "${user_config.diagnostics_bridge}"
     },
+    "initializationOptions": {
+      "tsserver": {
+        "useSyntaxServer": "never"
+      }
+    },
     "workspaceFolder": "${CLAUDE_PROJECT_DIR}",
     "startupTimeout": 60000
   }

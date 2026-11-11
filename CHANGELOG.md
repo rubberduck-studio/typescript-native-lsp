@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Fixes find-references, go-to-definition, hover and other navigation on TypeScript 6 and older returning answers from the open files only when asked right after a file was opened, which is how Claude Code asks: typescript-language-server's syntax server answered while the project was still loading (#3). It is now turned off, so those requests wait for the project, and each session runs one tsserver instead of two.
+
 ## 2.1.0
 
 - Runs [tsrs](https://github.com/oxc-project/tsrs), the Rust port of TypeScript 7, when `TYPESCRIPT_NATIVE_LSP_TSDK` points at it, for example `node_modules/tsrs` in a project's `.claude/settings.json` (#2). A relative path in that setting is now taken from the project directory. Diagnostics, document sync and idle shutdown work with tsrs as with TypeScript 7.
