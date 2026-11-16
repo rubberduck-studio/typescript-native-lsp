@@ -5,7 +5,7 @@
  * Claude Code itself sends the new content of open documents whose files change
  * on disk, or closes them. Today it sends nothing for files changed outside its
  * own Edit and Write tools (anthropics/claude-code#76870, #85225) and closes
- * documents only when evicting beyond 50 (anthropics/claude-code#93104), so files
+ * documents only when evicting beyond 50 (anthropics/claude-code#93104, closed without a fix), so files
  * changed by shell commands, git, formatters or codegen stay stale.
  *
  * It does not switch itself off on what the client advertises. Claude Code has
