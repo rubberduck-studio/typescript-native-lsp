@@ -1,6 +1,6 @@
 name: typescript-next
 
-# Runs the tests against the latest TypeScript nightly, to see changes to the native server before they are released.
+# Runs the tests against the latest TypeScript nightly and the latest tsrs, to see changes to either server before they reach the fixtures.
 on:
   schedule:
     - cron: '0 6 * * 1'
@@ -21,5 +21,6 @@ jobs:
           node-version: 24
       - run: npm run fixtures
       - run: npm install --prefix test/fixtures/ts7 --no-save typescript@next
-      - run: node -p "'typescript ' + require('./test/fixtures/ts7/node_modules/typescript/package.json').version"
+      - run: npm install --prefix test/fixtures/tsrs --no-save tsrs@latest
+      - run: node -p "'typescript ' + require('./test/fixtures/ts7/node_modules/typescript/package.json').version + ', tsrs ' + require('./test/fixtures/tsrs/node_modules/tsrs/package.json').version"
       - run: npm test
