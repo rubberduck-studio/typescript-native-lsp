@@ -19,7 +19,7 @@ updates:
         update-types: ["version-update:semver-major"]
 
   # The aliased fixture is left out: Dependabot skips npm: aliases in version updates.
-  # The tsrs fixture is too: every tsrs version is a semver prerelease (7.1.0-beta.tsrs3),
+  # The tsrs fixture is too: every tsrs version is a semver prerelease (7.1.0-beta.tsrs5),
   # and Dependabot reports no update between them; the typescript-next workflow tests tsrs@latest instead.
   - package-ecosystem: npm
     directories:
