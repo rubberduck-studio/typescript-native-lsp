@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- TypeScript 7.1's server and tsrs now run the content mappers a project's `tsconfig.json` declares, such as one that types CSS modules, as VS Code does in trusted workspaces (#5). The new `content_mappers` option turns this off; see [Content mappers](README.md#content-mappers). With idle shutdown and both workarounds off, the launcher now stays in front of TypeScript 7 as a proxy until `content_mappers` is off too.
 - The README explains how to use typescript-language-server or TypeScript installed with Volta or mise's npm backend on Windows, through `TYPESCRIPT_NATIVE_LSP_GLOBAL_ROOTS` (#7).
 
 ## 2.1.1

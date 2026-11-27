@@ -179,14 +179,16 @@ test('a Node that cannot strip types gets an explanation on stderr instead of a 
 });
 
 for (const [name, env, expected] of [
-	['ts7', {}, ['document-sync', 'diagnostics-bridge']],
+	['ts7', {}, ['content-mappers', 'document-sync', 'diagnostics-bridge']],
 	['ts6', {}, ['document-sync']],
-	['ts7', { TYPESCRIPT_NATIVE_LSP_DIAGNOSTICS: '0' }, ['document-sync']],
-	['ts7', { TYPESCRIPT_NATIVE_LSP_DIAGNOSTICS: 'false' }, ['document-sync']],
-	['ts7', { TYPESCRIPT_NATIVE_LSP_DOCUMENT_SYNC: '0' }, ['diagnostics-bridge']],
-	['ts7', { TYPESCRIPT_NATIVE_LSP_DOCUMENT_SYNC: 'false', TYPESCRIPT_NATIVE_LSP_DIAGNOSTICS: 'true' }, ['diagnostics-bridge']],
-	['ts7', { TYPESCRIPT_NATIVE_LSP_DOCUMENT_SYNC: 'off', TYPESCRIPT_NATIVE_LSP_DIAGNOSTICS: 'Yes' }, ['diagnostics-bridge']],
-	['ts7', { TYPESCRIPT_NATIVE_LSP_DOCUMENT_SYNC: 'nope' }, ['document-sync', 'diagnostics-bridge']],
+	['ts7', { TYPESCRIPT_NATIVE_LSP_DIAGNOSTICS: '0' }, ['content-mappers', 'document-sync']],
+	['ts7', { TYPESCRIPT_NATIVE_LSP_DIAGNOSTICS: 'false' }, ['content-mappers', 'document-sync']],
+	['ts7', { TYPESCRIPT_NATIVE_LSP_DOCUMENT_SYNC: '0' }, ['content-mappers', 'diagnostics-bridge']],
+	['ts7', { TYPESCRIPT_NATIVE_LSP_DOCUMENT_SYNC: 'false', TYPESCRIPT_NATIVE_LSP_DIAGNOSTICS: 'true' }, ['content-mappers', 'diagnostics-bridge']],
+	['ts7', { TYPESCRIPT_NATIVE_LSP_DOCUMENT_SYNC: 'off', TYPESCRIPT_NATIVE_LSP_DIAGNOSTICS: 'Yes' }, ['content-mappers', 'diagnostics-bridge']],
+	['ts7', { TYPESCRIPT_NATIVE_LSP_DOCUMENT_SYNC: 'nope' }, ['content-mappers', 'document-sync', 'diagnostics-bridge']],
+	['ts7', { TYPESCRIPT_NATIVE_LSP_CONTENT_MAPPERS: 'false' }, ['document-sync', 'diagnostics-bridge']],
+	['ts7', { TYPESCRIPT_NATIVE_LSP_CONTENT_MAPPERS: 'nope' }, ['document-sync', 'diagnostics-bridge']],
 	['ts6', { TYPESCRIPT_NATIVE_LSP_DOCUMENT_SYNC: '0' }, []],
 ] satisfies Array<[string, NodeJS.ProcessEnv, string[]]>) {
 	test(`${name} with ${JSON.stringify(env)} runs the proxy features ${JSON.stringify(expected)}`, { skip: false === installed(name) && 'run npm run fixtures' }, () => {
@@ -234,17 +236,18 @@ test('every plugin option reaches the launcher through .lsp.json, with the same 
 		TYPESCRIPT_NATIVE_LSP_IDLE_SECONDS: resolved.idleSeconds,
 		TYPESCRIPT_NATIVE_LSP_DOCUMENT_SYNC: resolved.proxyFeatures.includes('document-sync'),
 		TYPESCRIPT_NATIVE_LSP_DIAGNOSTICS: resolved.proxyFeatures.includes('diagnostics-bridge'),
+		TYPESCRIPT_NATIVE_LSP_CONTENT_MAPPERS: resolved.proxyFeatures.includes('content-mappers'),
 	});
 });
 
-test('with idle shutdown and both features off, the server runs directly and still answers', { skip: false === installed('ts7') && 'run npm run fixtures' }, async () => {
+test('with idle shutdown and every feature off, the server runs directly and still answers', { skip: false === installed('ts7') && 'run npm run fixtures' }, async () => {
 	const file = path.join(fixture('ts7'), 'error.ts');
-	const session = startSession(fixture('ts7'), { env: { TYPESCRIPT_NATIVE_LSP_IDLE_SECONDS: '0', TYPESCRIPT_NATIVE_LSP_DOCUMENT_SYNC: 'false', TYPESCRIPT_NATIVE_LSP_DIAGNOSTICS: 'false' } });
+	const session = startSession(fixture('ts7'), { env: { TYPESCRIPT_NATIVE_LSP_IDLE_SECONDS: '0', TYPESCRIPT_NATIVE_LSP_DOCUMENT_SYNC: 'false', TYPESCRIPT_NATIVE_LSP_DIAGNOSTICS: 'false', TYPESCRIPT_NATIVE_LSP_CONTENT_MAPPERS: 'false' } });
 	try {
 		await session.initialize();
 		session.openFile(file);
 		assert.notEqual(await hoverText(session, file, 0, 13), '');
-		assert.doesNotMatch(session.stderr, /idle shutdown after|document sync on|diagnostics bridge on/);
+		assert.doesNotMatch(session.stderr, /idle shutdown after|document sync on|diagnostics bridge on|content mappers on/);
 		if ('win32' !== process.platform) {
 			const running = spawnSync('ps', ['-o', 'command=', '-p', String(session.child.pid)], { encoding: 'utf8' }).stdout;
 			assert.match(running, /tsc --lsp --stdio/, 'the launcher should have replaced itself with the server');

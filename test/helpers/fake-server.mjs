@@ -3,8 +3,9 @@
  * a real server cannot be made slow or misbehave on demand. It answers
  * initialize, shutdown and exit, tracks open documents and the last
  * configuration, and answers hover with `fake server <pid> <state>`, where state
- * is JSON of the open documents' versions and the configuration, so a test can
- * tell servers apart and see what a restarted one was given. A `fake/exit`
+ * is JSON of the open documents' versions, the configuration and the
+ * initializationOptions, so a test can tell servers apart and see what a
+ * restarted one was given. A `fake/exit`
  * request ends the process with the code in its params. Environment:
  * - FAKE_HOVER_DELAY_MS: answer hover requests this much later.
  * - FAKE_SHUTDOWN_DELAY_MS: answer shutdown this much later.
@@ -53,6 +54,7 @@ if (ignoreExit) {
 
 const open = {};
 let config = null;
+let initializationOptions = null;
 let buffer = Buffer.alloc(0);
 process.stdin.on('data', chunk => {
 	buffer = Buffer.concat([buffer, chunk]);
@@ -74,6 +76,7 @@ process.stdin.on('data', chunk => {
 function handle(message) {
 	switch (message.method) {
 		case 'initialize':
+			initializationOptions = message.params.initializationOptions ?? null;
 			if (false === hang && false === failing) {
 				respond(message.id, { capabilities: { textDocumentSync: 1, hoverProvider: true }, serverInfo: { name: 'fake', version: '7.0.2' } });
 			}
@@ -91,7 +94,7 @@ function handle(message) {
 			config = message.params.settings;
 			return;
 		case 'textDocument/hover':
-			setTimeout(() => respond(message.id, { contents: { kind: 'plaintext', value: `fake server ${process.pid} ${JSON.stringify({ open, config })}` } }), hoverDelay);
+			setTimeout(() => respond(message.id, { contents: { kind: 'plaintext', value: `fake server ${process.pid} ${JSON.stringify({ open, config, initializationOptions })}` } }), hoverDelay);
 			return;
 		case 'fake/exit':
 			process.exit(message.params.code);

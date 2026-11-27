@@ -38,6 +38,12 @@
       "title": "Report type errors after edits (TypeScript 7)",
       "description": "Ask TypeScript 7's server for a file's errors after each edit and pass them to Claude, which only listens for pushed errors. Turn off only to rule it out when troubleshooting.",
       "default": true
+    },
+    "content_mappers": {
+      "type": "boolean",
+      "title": "Run content mappers (TypeScript 7.1)",
+      "description": "Let TypeScript run the content mappers a project's tsconfig.json declares, such as one that types CSS modules. A mapper runs a command named by the project, as TypeScript's VS Code extension allows in trusted workspaces. Turn off for repositories you do not trust.",
+      "default": true
     }
   }
 }

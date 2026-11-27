@@ -5,9 +5,11 @@
  * By default the launcher stays in the middle as a proxy (see proxy.mts) that
  * stops the server when idle and starts it again on demand, and runs the
  * features that work around gaps in Claude Code's LSP client: document sync for
- * every server and the diagnostics bridge for the native server. When idle
- * shutdown and both features are off, on POSIX it replaces itself with the
- * server (execve), so Claude Code talks to the server directly; on Windows, or
+ * every server and the diagnostics bridge for the native server. For the native
+ * server it also allows the content mappers a tsconfig.json declares, which
+ * takes a boolean in its initialize. When none of these is on, on POSIX it
+ * replaces itself with the server (execve), so Claude Code talks to the server
+ * directly; on Windows, or
  * where execve is unavailable, it stays as a thin parent that forwards signals
  * and exits with the server's status.
  *
@@ -15,8 +17,11 @@
  * which .lsp.json hands to the launcher as environment variables:
  * TYPESCRIPT_NATIVE_LSP_IDLE_SECONDS (idle_shutdown_seconds, default 600, 0 turns
  * it off), TYPESCRIPT_NATIVE_LSP_DOCUMENT_SYNC (document_sync) and
- * TYPESCRIPT_NATIVE_LSP_DIAGNOSTICS (diagnostics_bridge), the switches taking
- * true or false (or 1 or 0), on by default.
+ * TYPESCRIPT_NATIVE_LSP_DIAGNOSTICS (diagnostics_bridge) and
+ * TYPESCRIPT_NATIVE_LSP_CONTENT_MAPPERS (content_mappers), the switches taking
+ * true or false (or 1 or 0), on by default. A value the launcher does not
+ * recognise leaves a workaround on but content mappers off, since they run
+ * code.
  *
  * stdout carries the LSP protocol, so every message from the launcher goes to
  * stderr. `--resolve` prints the resolved command as JSON and exits, for
@@ -28,7 +33,7 @@ import { resolveServer, ResolveError, type Plan } from './resolve.mts';
 import type { FeatureFactory } from './proxy.mts';
 import { exitStatus, terminate } from './server.mts';
 
-type FeatureName = 'document-sync' | 'diagnostics-bridge';
+type FeatureName = 'content-mappers' | 'document-sync' | 'diagnostics-bridge';
 
 const DEFAULT_IDLE_SECONDS = 600;
 const SIGNALS: NodeJS.Signals[] = ['SIGINT', 'SIGTERM', 'SIGHUP'];
@@ -37,11 +42,15 @@ const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
 const resolveOnly = process.argv.includes('--resolve');
 const syncDocuments = readSwitch('TYPESCRIPT_NATIVE_LSP_DOCUMENT_SYNC');
 const bridgeDiagnostics = readSwitch('TYPESCRIPT_NATIVE_LSP_DIAGNOSTICS');
+const allowContentMappers = readSwitch('TYPESCRIPT_NATIVE_LSP_CONTENT_MAPPERS', 'off');
 const globalRoots = process.env.TYPESCRIPT_NATIVE_LSP_GLOBAL_ROOTS?.split(path.delimiter).filter(Boolean);
 const idleSeconds = readIdleSeconds(process.env.TYPESCRIPT_NATIVE_LSP_IDLE_SECONDS);
 
 const plan = resolvePlan();
 const features: FeatureName[] = [];
+if (plan.native && allowContentMappers) {
+	features.push('content-mappers');
+}
 if (syncDocuments) {
 	features.push('document-sync');
 }
@@ -102,8 +111,8 @@ function readIdleSeconds(value: string | undefined): number {
 	return DEFAULT_IDLE_SECONDS;
 }
 
-/** An on/off switch in the spellings Claude Code accepts for a boolean option; on unless set to off. Anything unrecognised leaves it on. */
-function readSwitch(name: string): boolean {
+/** An on/off switch in the spellings Claude Code accepts for a boolean option; on when unset. A value it does not recognise means `unrecognised`. */
+function readSwitch(name: string, unrecognised: 'on' | 'off' = 'on'): boolean {
 	const value = process.env[name]?.trim().toLowerCase();
 	if (undefined === value || '' === value || ['true', '1', 'yes', 'on'].includes(value)) {
 		return true;
@@ -111,13 +120,16 @@ function readSwitch(name: string): boolean {
 	if (['false', '0', 'no', 'off'].includes(value)) {
 		return false;
 	}
-	log(`ignoring ${name}=${process.env[name] ?? ''}: it must be true or false; leaving it on`);
-	return true;
+	log(`ignoring ${name}=${process.env[name] ?? ''}: it must be true or false; ${'on' === unrecognised ? 'leaving it on' : 'turning it off'}`);
+	return 'on' === unrecognised;
 }
 
 /** Loads the requested features in the order the proxy needs: the diagnostics bridge sees the client's original messages before document sync renumbers them. */
 async function loadFeatures(names: FeatureName[]): Promise<FeatureFactory[]> {
 	const factories: FeatureFactory[] = [];
+	if (names.includes('content-mappers')) {
+		factories.push((await import('./content-mappers.mts')).contentMappers);
+	}
 	if (names.includes('diagnostics-bridge')) {
 		factories.push((await import('./diagnostics-bridge.mts')).diagnosticsBridge);
 	}

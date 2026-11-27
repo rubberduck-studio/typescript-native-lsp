@@ -51,8 +51,9 @@ Change these in `/config`, with `/plugin configure typescript-native-lsp@typescr
 | `idle_shutdown_seconds` | `600` | Stops the server after this many seconds without activity and starts it again when Claude next needs it (see [Idle shutdown](#idle-shutdown)). `0` keeps it running for the whole session. |
 | `document_sync` | on | Keeps the files Claude has open in line with disk (see [Files changed outside Claude Code](#files-changed-outside-claude-code)). |
 | `diagnostics_bridge` | on | Reports type errors after edits on TypeScript 7 (see [Diagnostics](#diagnostics)). |
+| `content_mappers` | on | Lets TypeScript 7.1 and tsrs run the content mappers a project's `tsconfig.json` declares (see [Content mappers](#content-mappers)). |
 
-The two switches are workarounds you should only need to turn off to rule them out while troubleshooting.
+`document_sync` and `diagnostics_bridge` are workarounds you should only need to turn off to rule them out while troubleshooting.
 
 A few settings are environment variables instead, because they are per project, per machine or per run: `TYPESCRIPT_NATIVE_LSP_TSDK` and `TYPESCRIPT_NATIVE_LSP_GLOBAL_ROOTS` (see [Troubleshooting](#troubleshooting)) and `TYPESCRIPT_NATIVE_LSP_DEBUG=1`, which logs what the proxy does to stderr. Set them in the shell that starts Claude Code or in the `env` block of a [settings file](https://code.claude.com/docs/en/settings-reference#env).
 
@@ -67,7 +68,7 @@ On every start the launcher decides which server to run for the session's projec
 5. On macOS and Linux, `tsc` or `tsgo` on `PATH`, if `--version` reports 7 or newer.
 6. For TypeScript 6 and older: typescript-language-server, project-local, then under the global npm root, then on macOS and Linux on `PATH`. It locates TypeScript on its own, as the first `node_modules/typescript` above the workspace, so the launcher only checks that this will succeed and fails early with an explanation when it will not.
 
-TypeScript 7 or newer runs as the native binary from its platform package, `tsc --lsp --stdio`, and tsrs as its binary, `tsrs --lsp --stdio`. TypeScript 6 or older runs typescript-language-server with `--stdio` through `node` on its entry file, with its separate syntax server turned off (`useSyntaxServer: "never"`): that server answers definitions, references and hovers from the open files alone while the project loads, which an agent cannot tell from a complete answer, so requests wait for the project instead. Either way the launcher stays in front of the server as a small proxy that stops it when idle and works around gaps in Claude Code's LSP client, described in the sections below. With idle shutdown and both of its features switched off, the launcher replaces itself with the server on macOS and Linux. Nothing is ever run through a shell, and `.cmd` shims are never executed, which is why global installs are resolved as packages rather than found on `PATH` on Windows.
+TypeScript 7 or newer runs as the native binary from its platform package, `tsc --lsp --stdio`, and tsrs as its binary, `tsrs --lsp --stdio`. TypeScript 6 or older runs typescript-language-server with `--stdio` through `node` on its entry file, with its separate syntax server turned off (`useSyntaxServer: "never"`): that server answers definitions, references and hovers from the open files alone while the project loads, which an agent cannot tell from a complete answer, so requests wait for the project instead. Either way the launcher stays in front of the server as a small proxy that stops it when idle and works around gaps in Claude Code's LSP client, described in the sections below. With idle shutdown and every option the proxy handles switched off, the launcher replaces itself with the server on macOS and Linux. Nothing is ever run through a shell, and `.cmd` shims are never executed, which is why global installs are resolved as packages rather than found on `PATH` on Windows.
 
 The launcher makes no network requests and sends no telemetry. The only processes it spawns besides the server are `tsc --version` and `tsgo --version`, on macOS and Linux only, when probing a binary on `PATH`. Everything it logs goes to stderr and shows up in `claude --debug` output prefixed with `[typescript-native-lsp]`.
 
@@ -112,6 +113,14 @@ Inside Claude Code:
 ```
 
 The setting also accepts the directories tsrs's own editor setup names, `node_modules/tsrs/tsdk` and on Windows its platform package such as `node_modules/@tsrs/win32-x64`. `TSRS_BINARY`, tsrs's variable for a local build, is honoured as tsrs's launcher does.
+
+### Content mappers
+
+TypeScript 7.1 lets a project's `tsconfig.json` declare `contentMappers`: packages that turn other file types, such as CSS modules, into TypeScript, so the server can type them and navigate into them. A mapper runs whatever command its `package.json` names, and the package can be a dependency or a directory in the repository, so the server runs mappers only when the client allows it. Without that, files a mapper would handle fall back to whatever ambient declarations match them, such as a bundler's `*.module.css` index signature.
+
+The plugin allows it, as TypeScript's own VS Code extension does in every workspace you trust. That puts mappers on the same footing as a project's hooks and settings, which Claude Code also runs: after you trust the folder, without asking in a folder under one you already trust, and without asking at all in `claude -p` and SDK runs. Unlike hooks, mappers still run when hooks are turned off or project settings are not loaded, because the plugin cannot see those settings. Set the `content_mappers` option to off if you work in repositories you do not trust, or with Claude Code configured not to run their hooks.
+
+The launcher passes the permission as `runExternalCode` in the server's `initialize`, which is the only way to pass it: `tsc --lsp` has no command-line flag for it. It takes effect with TypeScript 7.1 and newer and with tsrs builds of TypeScript 7.1; earlier versions ignore it, and TypeScript 6 and older have no content mappers. Current TypeScript 7.1 builds load a mapper only from inside the session's directory, the one Claude Code started in, so in a monorepo a session started in a package directory does not run mappers installed at the repository root; start it at the root. Content mappers are new in TypeScript 7.1 and may still change before it is released.
 
 ## Files changed outside Claude Code
 

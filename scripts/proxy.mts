@@ -2,11 +2,11 @@
  * A stdio proxy between Claude Code and a language server.
  *
  * It runs the server (see server.mts), forwards every frame in both directions,
- * and lets a list of features observe, rewrite, drop or inject messages. Each
- * feature works around one gap between Claude Code's LSP client and the servers,
- * and each can be removed on its own once that gap is closed upstream. With no
- * features left and idle shutdown off, the proxy itself can go: main.mts then
- * execs the server directly.
+ * and lets a list of features observe, rewrite, drop or inject messages. Most
+ * features work around one gap between Claude Code's LSP client and the servers,
+ * and each of those can be removed on its own once that gap is closed upstream.
+ * With no features on and idle shutdown off, main.mts execs the server directly
+ * instead.
  */
 import { ID_PREFIX, createFrameReader, writeMessage, type Message } from './protocol.mts';
 import { startServer, type ServerCommand } from './server.mts';
