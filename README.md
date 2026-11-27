@@ -54,7 +54,7 @@ Change these in `/config`, with `/plugin configure typescript-native-lsp@typescr
 
 The two switches are workarounds you should only need to turn off to rule them out while troubleshooting.
 
-Two settings are environment variables instead, because they are per project or per run: `TYPESCRIPT_NATIVE_LSP_TSDK` (see Troubleshooting) and `TYPESCRIPT_NATIVE_LSP_DEBUG=1`, which logs what the proxy does to stderr. Set them in the shell that starts Claude Code or in the `env` block of a [settings file](https://code.claude.com/docs/en/settings-reference#env).
+A few settings are environment variables instead, because they are per project, per machine or per run: `TYPESCRIPT_NATIVE_LSP_TSDK` and `TYPESCRIPT_NATIVE_LSP_GLOBAL_ROOTS` (see [Troubleshooting](#troubleshooting)) and `TYPESCRIPT_NATIVE_LSP_DEBUG=1`, which logs what the proxy does to stderr. Set them in the shell that starts Claude Code or in the `env` block of a [settings file](https://code.claude.com/docs/en/settings-reference#env).
 
 ## How it works
 
@@ -63,7 +63,7 @@ On every start the launcher decides which server to run for the session's projec
 1. `TYPESCRIPT_NATIVE_LSP_TSDK`, if set, as the path of a `typescript` package directory of version 7 or newer, or of tsrs (see [Using tsrs](#using-tsrs)). A relative path is taken from the project directory.
 2. Every typescript package installed under `node_modules`, walking up from the project directory to the nearest lockfile or git root. A package counts by the name in its own package.json, not by its directory, so an alias such as `"@typescript/native": "npm:typescript@7"` is found wherever the package manager hoisted it. The highest version wins, so an aliased TypeScript 7 next to a TypeScript 6 API shim is picked up. This works the same under npm, pnpm, yarn and bun.
 3. Workspace packages under `packages/*` and `apps/*` of that root, same rule.
-4. A `typescript` package of version 7 or newer under the global npm root (`TYPESCRIPT_NATIVE_LSP_GLOBAL_ROOTS` overrides where to look, as a `PATH`-style list).
+4. A `typescript` package of version 7 or newer under the global npm root (`TYPESCRIPT_NATIVE_LSP_GLOBAL_ROOTS` overrides where to look, see [Troubleshooting](#troubleshooting)).
 5. On macOS and Linux, `tsc` or `tsgo` on `PATH`, if `--version` reports 7 or newer.
 6. For TypeScript 6 and older: typescript-language-server, project-local, then under the global npm root, then on macOS and Linux on `PATH`. It locates TypeScript on its own, as the first `node_modules/typescript` above the workspace, so the launcher only checks that this will succeed and fails early with an explanation when it will not.
 
@@ -83,6 +83,15 @@ node <installPath>/scripts/launch.mjs --resolve
 A clone of this repository works the same way: `node scripts/launch.mjs --resolve` from inside the project directory. Run from a shell, it shows the options as your shell's environment sets them, normally their defaults; the values set in Claude Code only reach the launcher when Claude Code starts it.
 
 If a project's TypeScript 7 is somewhere the launcher does not look, point `TYPESCRIPT_NATIVE_LSP_TSDK` at the package directory, for example `/path/to/node_modules/typescript`, in the shell that starts Claude Code. The override applies to TypeScript 7 or newer; typescript-language-server finds TypeScript 6 and older on its own.
+
+Global installs are found in the usual places for the global npm root, including the one of the `node` that runs the launcher, which covers `npm install -g` with any Node version manager that keeps global packages with each Node version, such as nvm or mise. Tools that give every global package a directory of its own are not covered: Volta (`volta install`) and mise's npm backend (`mise use -g npm:typescript-language-server`). On macOS and Linux typescript-language-server's shim on `PATH` still works; on Windows, where the launcher never runs shims, list the package's parent directory in `TYPESCRIPT_NATIVE_LSP_GLOBAL_ROOTS`, a `PATH`-style list (`;`-separated on Windows) that replaces the places the launcher looks for global packages:
+
+| Installed with | Directory to list |
+| --- | --- |
+| Volta | `tools\shared` under `VOLTA_HOME`, by default `%LOCALAPPDATA%\Volta\tools\shared` (all Volta packages) |
+| mise, npm backend | `node_modules` in the directory `mise where npm:typescript-language-server` prints, such as `%LOCALAPPDATA%\mise\installs\npm-typescript-language-server\6.1.0\node_modules`; it names the version, so update it after an upgrade |
+
+Settings files do not expand variables such as `%LOCALAPPDATA%`, so write the full path, and add the global npm root (`%APPDATA%\npm\node_modules`) to the list if you also install with `npm install -g`. `--resolve` shows whether the package is found.
 
 Inside Claude Code:
 

@@ -56,6 +56,50 @@ test('--resolve prints the plan as JSON', { skip: false === installed('ts7') && 
 	assert.equal(plan.native, true);
 });
 
+/** A throwaway directory that holds one global package the way Volta and mise's npm backend do: a node_modules of its own. */
+function packageDirectory(name: string, files: Record<string, string>): string {
+	const nodeModules = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'typescript-native-lsp-global-')), name, 'node_modules');
+	for (const [file, text] of Object.entries(files)) {
+		fs.mkdirSync(path.dirname(path.join(nodeModules, file)), { recursive: true });
+		fs.writeFileSync(path.join(nodeModules, file), text);
+	}
+	return nodeModules;
+}
+
+function resolveWithGlobalRoots(projectDir: string, roots: string[]): { reason: string } {
+	const result = spawnSync(process.execPath, [launcher, '--resolve'], { cwd: projectDir, env: { ...envFor(projectDir), TYPESCRIPT_NATIVE_LSP_GLOBAL_ROOTS: roots.join(path.delimiter) }, encoding: 'utf8' });
+	assert.equal(result.status, 0, result.stderr);
+	return JSON.parse(result.stdout);
+}
+
+test('TYPESCRIPT_NATIVE_LSP_GLOBAL_ROOTS finds a typescript-language-server installed in a directory of its own', { skip: false === installed('ts6') && 'run npm run fixtures' }, () => {
+	const project = fs.mkdtempSync(path.join(os.tmpdir(), 'typescript-native-lsp-ts6-'));
+	fs.writeFileSync(path.join(project, 'package-lock.json'), '{}');
+	fs.mkdirSync(path.join(project, 'node_modules'));
+	fs.symlinkSync(path.join(fixture('ts6'), 'node_modules', 'typescript'), path.join(project, 'node_modules', 'typescript'), 'junction');
+	const roots = [path.join(os.tmpdir(), 'typescript-native-lsp-missing-root'), packageDirectory('typescript-language-server', { 'typescript-language-server/lib/cli.mjs': '' })];
+	try {
+		const plan = resolveWithGlobalRoots(project, roots);
+		assert.ok(plan.reason.includes(`global typescript-language-server at ${path.join(roots[1] ?? '', 'typescript-language-server', 'lib', 'cli.mjs')}`), plan.reason);
+	} finally {
+		fs.rmSync(project, { recursive: true, force: true });
+		fs.rmSync(path.dirname(path.dirname(roots[1] ?? '')), { recursive: true, force: true });
+	}
+});
+
+test('TYPESCRIPT_NATIVE_LSP_GLOBAL_ROOTS finds a TypeScript 7 installed in a directory of its own', () => {
+	const project = fs.mkdtempSync(path.join(os.tmpdir(), 'typescript-native-lsp-none-'));
+	fs.writeFileSync(path.join(project, 'package-lock.json'), '{}');
+	const roots = [path.join(os.tmpdir(), 'typescript-native-lsp-missing-root'), packageDirectory('typescript', { 'typescript/package.json': JSON.stringify({ name: 'typescript', version: '7.0.2' }), 'typescript/lib/tsc.js': '' })];
+	try {
+		const plan = resolveWithGlobalRoots(project, roots);
+		assert.ok(plan.reason.startsWith(`TypeScript 7.0.2 via the global npm root at ${path.join(roots[1] ?? '', 'typescript')}`), plan.reason);
+	} finally {
+		fs.rmSync(project, { recursive: true, force: true });
+		fs.rmSync(path.dirname(path.dirname(roots[1] ?? '')), { recursive: true, force: true });
+	}
+});
+
 test('unresolvable project exits 1 with a message on stderr and nothing on stdout', () => {
 	const empty = fs.mkdtempSync(path.join(os.tmpdir(), 'typescript-native-lsp-empty-'));
 	fs.writeFileSync(path.join(empty, 'package-lock.json'), '{}');

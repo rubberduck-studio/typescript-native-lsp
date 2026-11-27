@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- The README explains how to use typescript-language-server or TypeScript installed with Volta or mise's npm backend on Windows, through `TYPESCRIPT_NATIVE_LSP_GLOBAL_ROOTS` (#7).
+
 ## 2.1.1
 
 - Fixes find-references, go-to-definition, hover and other navigation on TypeScript 6 and older returning answers from the open files only when asked right after a file was opened, which is how Claude Code asks: typescript-language-server's syntax server answered while the project was still loading (#3). It is now turned off, so those requests wait for the project, and each session runs one tsserver instead of two.
