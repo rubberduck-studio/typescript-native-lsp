@@ -1,16 +1,12 @@
 # typescript-native-lsp
 
+[![ci](https://github.com/rubberduck-studio/typescript-native-lsp/actions/workflows/ci.yml/badge.svg)](https://github.com/rubberduck-studio/typescript-native-lsp/actions/workflows/ci.yml)
+[![release](https://img.shields.io/github/v/release/rubberduck-studio/typescript-native-lsp)](https://github.com/rubberduck-studio/typescript-native-lsp/releases)
+[![license](https://img.shields.io/github/license/rubberduck-studio/typescript-native-lsp)](LICENSE)
+
 TypeScript/JavaScript language server for Claude Code that runs TypeScript 7's native LSP (`tsc --lsp`) and falls back to typescript-language-server for TypeScript 6 and older, providing code intelligence features like go-to-definition, find references, type information, and type errors reported after edits.
 
-## What you get
-
-- **Type errors after edits, without running a typecheck.** When Claude edits a file, that file's errors reach the conversation on its next tool call, so mistakes are caught while Claude is still on the file rather than after a full `tsc` run.
-- **Answers that match the files on disk.** Files changed by shell commands, git, formatters or codegen are picked up before the next request, and renamed or deleted files leave the program instead of lingering as ghosts. The official plugin, like any server Claude Code talks to directly, keeps serving the version Claude last edited.
-- **Compiler-backed navigation instead of grep.** Go to definition, find references, implementations, call hierarchy, document and workspace symbols, and the resolved type and documentation of any symbol.
-- **Memory back when Claude is busy elsewhere.** A server that has received nothing for 10 minutes is stopped and starts again, with the same open files, the next time Claude needs it. On a large repository that returns several GB per session (see [Idle shutdown](#idle-shutdown)).
-- **TypeScript 7's speed.** The native server starts and loads large projects far faster than `tsserver`, and it is the same compiler that typechecks your build.
-
-## Why this plugin exists
+## Why use it
 
 The official [`typescript-lsp`](https://github.com/anthropics/claude-plugins-official/tree/main/plugins/typescript-lsp) plugin launches typescript-language-server, which wraps the classic `tsserver`. TypeScript 7 is the native Go port of the compiler and ships no `tsserver.js`, so on a TypeScript 7 project that plugin fails every request with:
 
@@ -19,7 +15,22 @@ Could not find a valid TypeScript installation. Please ensure that the "typescri
 dependency is installed in the workspace or that a valid `tsserver.path` is specified.
 ```
 
-TypeScript 7 serves LSP itself instead, via `tsc --lsp --stdio`. This plugin launches that server when the project uses TypeScript 7 or newer, and launches typescript-language-server when it uses TypeScript 6 or older, so one plugin covers both. It is a drop-in replacement for `typescript-lsp`; the two must not be enabled together (see Installation).
+This plugin is a drop-in replacement that covers TypeScript 7 and older versions alike, and closes several gaps between Claude Code and its language servers:
+
+- **Type errors after edits, without running a typecheck.** When Claude edits a file, that file's errors reach the conversation on its next tool call, so mistakes are caught while Claude is still on the file rather than after a full `tsc` run. → [Diagnostics](#diagnostics)
+- **Answers that match the files on disk.** Files changed by shell commands, git, formatters or codegen are picked up before the next request, and renamed or deleted files leave the program instead of lingering as ghosts. → [Files changed outside Claude Code](#files-changed-outside-claude-code)
+- **Compiler-backed navigation instead of grep.** Go to definition, find references, implementations, call hierarchy, document and workspace symbols, and the resolved type and documentation of any symbol.
+- **Memory back when Claude is busy elsewhere.** A server that has received nothing for 10 minutes is stopped and starts again, with the same open files, when Claude next needs it. On a large repository that returns several GB per session. → [Idle shutdown](#idle-shutdown)
+- **TypeScript 7's speed.** The native server starts and loads large projects far faster than `tsserver`, and it is the same compiler that typechecks your build.
+
+| | `typescript-lsp` (official) | This plugin |
+| --- | --- | --- |
+| TypeScript 7 projects | Every request fails | Native server, `tsc --lsp` |
+| TypeScript 6 and older | typescript-language-server | typescript-language-server |
+| Type errors after edits | TypeScript 6 and older | All versions |
+| Files changed outside Claude Code | Stale until the session ends | Picked up before the next request |
+| Memory of an idle session | Held until the session ends | Released after 10 minutes |
+| [tsrs](#using-tsrs), [content mappers](#content-mappers) | No | Yes |
 
 ## Supported Extensions
 `.ts`, `.tsx`, `.js`, `.jsx`, `.mts`, `.cts`, `.mjs`, `.cjs`
@@ -32,137 +43,117 @@ claude plugin install typescript-native-lsp@typescript-native-lsp
 claude plugin disable typescript-lsp@claude-plugins-official
 ```
 
-The last line matters. When two enabled plugins claim the same file extension, Claude Code starts only the first one it registers and never starts the other; the `/plugin` interface shows a warning naming the active one. Which plugin registers first is not something you control, so disable `typescript-lsp` rather than relying on the order. Restart Claude Code or run `/reload-plugins` afterwards.
+The last line matters: the two plugins must not be enabled together, because Claude Code starts only one server per file extension and you do not control which. Restart Claude Code or run `/reload-plugins` afterwards.
+
+**Check that it works:** start `claude --debug` in a TypeScript project and look for `Loaded 1 LSP server(s) from plugin: typescript-native-lsp`. Start failures show up in the Errors tab of `/plugin`.
+
+**Update:**
+
+```bash
+claude plugin marketplace update typescript-native-lsp
+claude plugin update typescript-native-lsp@typescript-native-lsp
+```
 
 ### Requirements
 
-- **Claude Code 2.1.288 or newer**, the first version that passes a plugin's options, with their defaults, to its language servers. Older versions do not start the server. Cloud sessions never start plugin language servers, so the plugin only works in local sessions.
-- **Node.js 22.18 or newer** on `PATH`. Claude Code spawns the launcher as `node`, and the plugin is written in TypeScript that Node runs directly by stripping the types, which Node does by default from 22.18 on. The fallback for TypeScript 6 and older runs typescript-language-server 6, which requires Node 22.22 or newer.
-- **For TypeScript 7 projects:** nothing else. The project's own `typescript` dependency provides the server.
-- **For TypeScript 6 and older:** typescript-language-server, either in the project (`npm install -D typescript-language-server`) or globally (`npm install -g typescript-language-server`). It locates TypeScript itself, as the project's `typescript` dependency, which must be 6 or older and a full install, not an API-only package. Do not install a global `typescript` for this: on a fresh machine that resolves to TypeScript 7, which has no tsserver and cannot serve TypeScript 6 projects.
-- **Projects without TypeScript:** a global TypeScript 7 or newer, from `npm install -g typescript` on any platform, or on macOS and Linux any `tsc` on `PATH` such as `brew install typescript`.
+| | Needs |
+| --- | --- |
+| Always | Claude Code 2.1.288 or newer, in a local session (cloud sessions never start plugin language servers). Node.js 22.18 or newer on `PATH`. |
+| TypeScript 7 project | Nothing else. The project's own `typescript` dependency provides the server. |
+| TypeScript 6 or older project | typescript-language-server, in the project (`npm install -D typescript-language-server`) or global (`npm install -g typescript-language-server`), and Node.js 22.22 or newer. Do not install a global `typescript` for this. |
+| Project without TypeScript | A global TypeScript 7 or newer (`npm install -g typescript`), or on macOS and Linux any `tsc` on `PATH`, such as `brew install typescript`. |
+
+The reasons behind each are in [Requirements in detail](docs/configuration.md#requirements-in-detail).
+
+## Configuration
 
 ### Options
 
-Change these in `/config`, with `/plugin configure typescript-native-lsp@typescript-native-lsp`, or at install with `claude plugin install … --config <option>=<value>`. They apply to every project. Every option has a default, so installing prints that the options are not yet set and an interactive install shows them in a dialog; leaving them as they are is fine.
+Plugin options apply to every project. Change them in `/config`, with `/plugin configure typescript-native-lsp@typescript-native-lsp`, or at install with `--config <option>=<value>`. The defaults are fine to leave as they are.
 
 | Option | Default | What it does |
 | --- | --- | --- |
-| `idle_shutdown_seconds` | `600` | Stops the server after this many seconds without activity and starts it again when Claude next needs it (see [Idle shutdown](#idle-shutdown)). `0` keeps it running for the whole session. |
-| `document_sync` | on | Keeps the files Claude has open in line with disk (see [Files changed outside Claude Code](#files-changed-outside-claude-code)). |
-| `diagnostics_bridge` | on | Reports type errors after edits on TypeScript 7 (see [Diagnostics](#diagnostics)). |
-| `content_mappers` | on | Lets TypeScript 7.1 and tsrs run the content mappers a project's `tsconfig.json` declares (see [Content mappers](#content-mappers)). |
+| `idle_shutdown_seconds` | `600` | Stops the server after this many seconds without activity and starts it again when Claude next needs it. `0` keeps it running for the whole session. |
+| `document_sync` | on | Keeps the files Claude has open in line with disk. |
+| `diagnostics_bridge` | on | Reports type errors after edits on TypeScript 7. |
+| `content_mappers` | on | Lets TypeScript 7.1 and tsrs run the content mappers a project's `tsconfig.json` declares. |
 
 `document_sync` and `diagnostics_bridge` are workarounds you should only need to turn off to rule them out while troubleshooting.
 
-A few settings are environment variables instead, because they are per project, per machine or per run: `TYPESCRIPT_NATIVE_LSP_TSDK` and `TYPESCRIPT_NATIVE_LSP_GLOBAL_ROOTS` (see [Troubleshooting](#troubleshooting)) and `TYPESCRIPT_NATIVE_LSP_DEBUG=1`, which logs what the proxy does to stderr. Set them in the shell that starts Claude Code or in the `env` block of a [settings file](https://code.claude.com/docs/en/settings-reference#env).
+### Environment variables
+
+Settings that are per project, per machine or per run. Set them in the shell that starts Claude Code or in the `env` block of a [settings file](https://code.claude.com/docs/en/settings-reference#env).
+
+| Variable | What it does |
+| --- | --- |
+| `TYPESCRIPT_NATIVE_LSP_TSDK` | Path of the TypeScript 7 or tsrs package to run, skipping the search. |
+| `TYPESCRIPT_NATIVE_LSP_GLOBAL_ROOTS` | Where to look for global packages, as a `PATH`-style list. |
+| `TYPESCRIPT_NATIVE_LSP_DEBUG` | `1` logs what the proxy does to stderr. |
+
+Details: [docs/configuration.md](docs/configuration.md).
 
 ## How it works
 
-On every start the launcher decides which server to run for the session's project directory, in this order:
+On every start the launcher picks a server for the session's project directory: the project's own TypeScript 7 or newer runs as its native binary (`tsc --lsp --stdio`), and a project on TypeScript 6 or older gets typescript-language-server. It looks in the project's `node_modules` (including aliased packages and workspace packages), then in global installs, then on `PATH`. The launcher then stays in front of the server as a small proxy that provides the features below. It makes no network requests, sends no telemetry and never runs anything through a shell.
 
-1. `TYPESCRIPT_NATIVE_LSP_TSDK`, if set, as the path of a `typescript` package directory of version 7 or newer, or of tsrs (see [Using tsrs](#using-tsrs)). A relative path is taken from the project directory.
-2. Every typescript package installed under `node_modules`, walking up from the project directory to the nearest lockfile or git root. A package counts by the name in its own package.json, not by its directory, so an alias such as `"@typescript/native": "npm:typescript@7"` is found wherever the package manager hoisted it. The highest version wins, so an aliased TypeScript 7 next to a TypeScript 6 API shim is picked up. This works the same under npm, pnpm, yarn and bun.
-3. Workspace packages under `packages/*` and `apps/*` of that root, same rule.
-4. A `typescript` package of version 7 or newer under the global npm root (`TYPESCRIPT_NATIVE_LSP_GLOBAL_ROOTS` overrides where to look, see [Troubleshooting](#troubleshooting)).
-5. On macOS and Linux, `tsc` or `tsgo` on `PATH`, if `--version` reports 7 or newer.
-6. For TypeScript 6 and older: typescript-language-server, project-local, then under the global npm root, then on macOS and Linux on `PATH`. It locates TypeScript on its own, as the first `node_modules/typescript` above the workspace, so the launcher only checks that this will succeed and fails early with an explanation when it will not.
+The full resolution order and the details of each feature are in [docs/how-it-works.md](docs/how-it-works.md).
 
-TypeScript 7 or newer runs as the native binary from its platform package, `tsc --lsp --stdio`, and tsrs as its binary, `tsrs --lsp --stdio`. TypeScript 6 or older runs typescript-language-server with `--stdio` through `node` on its entry file, with its separate syntax server turned off (`useSyntaxServer: "never"`): that server answers definitions, references and hovers from the open files alone while the project loads, which an agent cannot tell from a complete answer, so requests wait for the project instead. Either way the launcher stays in front of the server as a small proxy that stops it when idle and works around gaps in Claude Code's LSP client, described in the sections below. With idle shutdown and every option the proxy handles switched off, the launcher replaces itself with the server on macOS and Linux. Nothing is ever run through a shell, and `.cmd` shims are never executed, which is why global installs are resolved as packages rather than found on `PATH` on Windows.
+### Diagnostics
 
-The launcher makes no network requests and sends no telemetry. The only processes it spawns besides the server are `tsc --version` and `tsgo --version`, on macOS and Linux only, when probing a binary on `PATH`. Everything it logs goes to stderr and shows up in `claude --debug` output prefixed with `[typescript-native-lsp]`.
+Claude Code only listens for type errors a server pushes, and TypeScript 7's native server only answers when asked. After each edit the proxy asks the server for the file's errors and publishes them to Claude Code. The bridge is an interim measure that switches itself off once Claude Code asks itself ([anthropics/claude-code#40282](https://github.com/anthropics/claude-code/issues/40282)) and will be removed once either side closes the gap ([microsoft/TypeScript#63921](https://github.com/microsoft/TypeScript/pull/63921)). → [Details](docs/how-it-works.md#diagnostics-bridge)
 
-### Troubleshooting
+### Files changed outside Claude Code
 
-Run the launcher's resolve mode from the project directory to see what it would start and why. The installed copy lives in Claude Code's plugin cache; `claude plugin list --json` prints its location as `installPath`:
+Claude Code tells the server only about files its own Edit and Write tools touch, and never closes one, so changes made by shell commands, git, formatters or codegen stay invisible for the rest of the session. This affects every LSP plugin ([anthropics/claude-code#76870](https://github.com/anthropics/claude-code/issues/76870)). Before every request the proxy compares each open document with its file and sends the server what changed. → [Details](docs/how-it-works.md#document-sync)
+
+### Idle shutdown
+
+Claude Code keeps a language server running until the session ends, and TypeScript's servers hold about 2 GB after opening a single file of a large repository, growing past 6 GB. The proxy stops the server after 10 minutes without activity and starts a new one, with the same open files, on the next request or edit. That first request is a cold start: about a second on a repository of 4,700 TypeScript files. → [Details](docs/how-it-works.md#idle-shutdown)
+
+### Content mappers
+
+TypeScript 7.1 lets a `tsconfig.json` declare `contentMappers`, packages that turn other file types such as CSS modules into TypeScript. A mapper runs a command the project names, so the server runs them only when the client allows it. The plugin allows it, as TypeScript's own VS Code extension does in trusted workspaces. Turn the `content_mappers` option off if you work in repositories you do not trust. → [Details, including what "trusted" means here](docs/configuration.md#content-mappers)
+
+### Using tsrs
+
+[tsrs](https://github.com/oxc-project/tsrs), the Rust port of TypeScript 7, works with everything here. It is never picked up on its own; set `TYPESCRIPT_NATIVE_LSP_TSDK` to `node_modules/tsrs` in the project's `.claude/settings.json`. → [Details](docs/configuration.md#using-tsrs)
+
+### Git worktrees
+
+When Claude enters a worktree mid-session, the server stays rooted where the session started, and requests on worktree files are still answered correctly. A session launched inside a worktree needs that worktree to have its own `node_modules`. → [Details](docs/how-it-works.md#git-worktrees)
+
+## Troubleshooting
+
+Run the launcher's resolve mode from the project directory to see what it would start and why:
 
 ```bash
 claude plugin list --json   # note the installPath of typescript-native-lsp
 node <installPath>/scripts/launch.mjs --resolve
 ```
 
-A clone of this repository works the same way: `node scripts/launch.mjs --resolve` from inside the project directory. Run from a shell, it shows the options as your shell's environment sets them, normally their defaults; the values set in Claude Code only reach the launcher when Claude Code starts it.
+Inside Claude Code, `/plugin` shows start failures in its Errors tab, and `claude --debug` shows the launcher's log lines, prefixed with `[typescript-native-lsp]`.
 
-If a project's TypeScript 7 is somewhere the launcher does not look, point `TYPESCRIPT_NATIVE_LSP_TSDK` at the package directory, for example `/path/to/node_modules/typescript`, in the shell that starts Claude Code. The override applies to TypeScript 7 or newer; typescript-language-server finds TypeScript 6 and older on its own.
-
-Global installs are found in the usual places for the global npm root, including the one of the `node` that runs the launcher, which covers `npm install -g` with any Node version manager that keeps global packages with each Node version, such as nvm or mise. Tools that give every global package a directory of its own are not covered: Volta (`volta install`) and mise's npm backend (`mise use -g npm:typescript-language-server`). On macOS and Linux typescript-language-server's shim on `PATH` still works; on Windows, where the launcher never runs shims, list the package's parent directory in `TYPESCRIPT_NATIVE_LSP_GLOBAL_ROOTS`, a `PATH`-style list (`;`-separated on Windows) that replaces the places the launcher looks for global packages:
-
-| Installed with | Directory to list |
-| --- | --- |
-| Volta | `tools\shared` under `VOLTA_HOME`, by default `%LOCALAPPDATA%\Volta\tools\shared` (all Volta packages) |
-| mise, npm backend | `node_modules` in the directory `mise where npm:typescript-language-server` prints, such as `%LOCALAPPDATA%\mise\installs\npm-typescript-language-server\6.1.0\node_modules`; it names the version, so update it after an upgrade |
-
-Settings files do not expand variables such as `%LOCALAPPDATA%`, so write the full path, and add the global npm root (`%APPDATA%\npm\node_modules`) to the list if you also install with `npm install -g`. `--resolve` shows whether the package is found.
-
-Inside Claude Code:
-
-- `/plugin` lists installed plugins and shows start failures in its Errors tab, including an `Executable not found in $PATH` for a missing `node`.
-- `claude --debug` logs `Loaded 1 LSP server(s) from plugin: typescript-native-lsp` and `Total LSP servers loaded: N` at startup, then the launcher's `[typescript-native-lsp]` lines when the server starts, including the resolved project directory, TypeScript and command.
-- `/reload-plugins` picks up plugin changes without restarting the session.
-
-### Using tsrs
-
-[tsrs](https://github.com/oxc-project/tsrs) is a Rust port of TypeScript 7 whose language server speaks the same protocol as TypeScript 7's and serves diagnostics the same way, so everything here works with it. It is never picked up on its own, because a project may install it for type-checking in CI rather than in the editor. To run it for a project, install it there (`npm install -D tsrs`) and point `TYPESCRIPT_NATIVE_LSP_TSDK` at it in the project's `.claude/settings.json`:
-
-```json
-{
-  "env": {
-    "TYPESCRIPT_NATIVE_LSP_TSDK": "node_modules/tsrs"
-  }
-}
-```
-
-The setting also accepts the directories tsrs's own editor setup names, `node_modules/tsrs/tsdk` and on Windows its platform package such as `node_modules/@tsrs/win32-x64`. `TSRS_BINARY`, tsrs's variable for a local build, is honoured as tsrs's launcher does.
-
-### Content mappers
-
-TypeScript 7.1 lets a project's `tsconfig.json` declare `contentMappers`: packages that turn other file types, such as CSS modules, into TypeScript, so the server can type them and navigate into them. A mapper runs whatever command its `package.json` names, and the package can be a dependency or a directory in the repository, so the server runs mappers only when the client allows it. Without that, files a mapper would handle fall back to whatever ambient declarations match them, such as a bundler's `*.module.css` index signature.
-
-The plugin allows it, as TypeScript's own VS Code extension does in every workspace you trust. That puts mappers on the same footing as a project's hooks and settings, which Claude Code also runs: after you trust the folder, without asking in a folder under one you already trust, and without asking at all in `claude -p` and SDK runs. Unlike hooks, mappers still run when hooks are turned off or project settings are not loaded, because the plugin cannot see those settings. Set the `content_mappers` option to off if you work in repositories you do not trust, or with Claude Code configured not to run their hooks.
-
-The launcher passes the permission as `runExternalCode` in the server's `initialize`, which is the only way to pass it: `tsc --lsp` has no command-line flag for it. It takes effect with TypeScript 7.1 and newer and with tsrs builds of TypeScript 7.1; earlier versions ignore it, and TypeScript 6 and older have no content mappers. Current TypeScript 7.1 builds load a mapper only from inside the session's directory, the one Claude Code started in, so in a monorepo a session started in a package directory does not run mappers installed at the repository root; start it at the root. Content mappers are new in TypeScript 7.1 and may still change before it is released.
-
-## Files changed outside Claude Code
-
-Claude Code tells the language server only about files its own Edit and Write tools touch, and it never closes a document. Servers treat an open document as authoritative over disk, so once Claude has touched a file, changes made to it by shell commands, git, formatters or codegen stay invisible for the rest of the session, and a renamed or deleted file lingers in the program. Answers then point into files that no longer exist, and diagnostics report conflicts with them. This affects every LSP plugin, including the official one ([anthropics/claude-code#76870](https://github.com/anthropics/claude-code/issues/76870)).
-
-Claude Code has no unsaved buffers, so disk is always the truth. Before every request the proxy compares each document Claude has opened with its file: a changed file is sent to the server with its current content, a deleted file is closed and its diagnostics cleared, and a file that reappears is opened again. Checking costs a file-status call per open document, well under a millisecond per request. It works the same for TypeScript 7 and TypeScript 6 and older.
-
-This is an interim measure too, and it will be removed once Claude Code itself sends the new content of open files that change on disk, or closes them ([anthropics/claude-code#76870](https://github.com/anthropics/claude-code/issues/76870)). It stays on regardless of what the client advertises: since 2.1.288 Claude Code advertises file watching but never sends file-change events, and such events would not refresh open documents anyway, because servers treat an open document as the client's. When disk and server agree it sends nothing. The `document_sync` option turns it off.
-
-## Diagnostics
-
-Claude Code attaches a file's type errors to the conversation after an edit, and it learns about them only through pushed `textDocument/publishDiagnostics` notifications. TypeScript 7's native server never pushes per-file diagnostics; it answers `textDocument/diagnostic` requests instead. To close that gap the proxy bridges the two for the native server: it forwards all traffic unchanged and, after each `didOpen`, `didChange` or `didSave`, requests the file's diagnostics from the server and publishes the result to Claude Code. The effect is the same as with typescript-language-server on TypeScript 6 and older, which pushes on its own and needs no bridge.
-
-The bridge is an interim measure. It switches itself off once the client requests diagnostics itself, rather than when it merely advertises support, and it will be removed once TypeScript pushes for such clients ([microsoft/TypeScript#63921](https://github.com/microsoft/TypeScript/pull/63921)) or Claude Code pulls ([anthropics/claude-code#40282](https://github.com/anthropics/claude-code/issues/40282)). The `diagnostics_bridge` option turns it off; `TYPESCRIPT_NATIVE_LSP_DEBUG=1` logs each request and publish to stderr.
-
-## Idle shutdown
-
-Claude Code keeps a language server running from its first request until the session ends, and TypeScript's servers keep the memory of every project they have loaded until they exit. On a large repository that is about 2 GB after opening a single file and can grow past 6 GB once many files have been checked, per session, including sessions that have long since moved on to other work.
-
-So the proxy stops the server once Claude Code has sent nothing for 10 minutes and no request is waiting for an answer, and starts a new one when Claude next needs it: on the next request, or on the next edit, so that the edit's type errors are still reported. The new server gets the session's original settings and every file the old one had open, with the same content, so answers continue where they left off. The cost is a cold start on that first request: about a second for a hover on a repository of 4,700 TypeScript files, well inside Claude Code's 60-second request limit. An edit that wakes the server waits for that cold start too, so its type errors are more likely to reach the conversation a tool call later than usual (see Limitations). Activity means what Claude Code sends and the server's answers to it. The server's own log and progress messages do not count, or a server watching a busy repository would never be stopped.
-
-The idle period is the `idle_shutdown_seconds` option (see [Options](#options)). Each restart looks for the server again, so a TypeScript upgrade or branch switch while the server was stopped is picked up; when the project switched between TypeScript 7 and 6, the launcher ends and Claude Code starts it again with the right setup. If the server cannot be started, for example while `node_modules` is being reinstalled or when it does not answer within a minute, the request fails in a way Claude Code retries, and the next request tries again.
-
-## Git worktrees
-
-Claude Code roots the server at the directory the session started in and keeps it there when Claude enters a git worktree later: `${CLAUDE_PROJECT_DIR}` and the server's working directory stay at the original checkout, so the launcher resolves TypeScript from that checkout. Requests on worktree files are still answered correctly, because the native server resolves each opened file's own `tsconfig.json`: a type lookup finds symbols that exist only in the worktree, and references for a worktree file return worktree paths only. This holds whether the server started before or after Claude entered the worktree. A session launched inside a worktree resolves TypeScript from the worktree itself.
-
-Two consequences. The TypeScript that runs the server is the one installed where the session started, so a worktree branch that changes the TypeScript version is served by the start directory's version; launch the session inside the worktree or set `TYPESCRIPT_NATIVE_LSP_TSDK` if that matters. And a session launched inside a worktree needs that worktree to have its own `node_modules`: resolution stops at the worktree's `.git` file and does not fall through to the main checkout, on purpose, since the main checkout may hold different dependency versions.
+[docs/troubleshooting.md](docs/troubleshooting.md) covers a server that never starts, TypeScript in a place the launcher does not look, and global installs with Volta or mise on Windows.
 
 ## Limitations
 
-- **The first request after an idle period is a cold start.** See [Idle shutdown](#idle-shutdown) for how long that takes and how to change or turn off the idle period.
+- **The first request after an idle period is a cold start.** See [Idle shutdown](#idle-shutdown).
 - **Diagnostics arrive one tool call late, and only for files Claude edits.** Claude Code does not wait for a language server's diagnostics after an edit; it attaches whatever arrived by the next tool call, and drops diagnostics for a file that the very next call edits again. It also opens a file with the server only when it edits it, so an edit that breaks a different file goes unnoticed until a full typecheck. Both are client behaviour, identical for every LSP plugin ([anthropics/claude-code#93321](https://github.com/anthropics/claude-code/issues/93321)).
-- **Windows has no real-session report yet.** The launcher is written for it (no `.cmd` spawning, npm shim parsing, no `execve`) and CI completes the initialize handshake with both servers on Windows, but nobody has used it from an interactive Claude Code session on Windows so far. Reports welcome.
+- **Windows is covered by CI, with little real-session experience.** The launcher is written for it (no `.cmd` spawning, npm shim parsing, no `execve`) and CI runs the test suite against both servers on Windows. Reports from interactive Claude Code sessions on Windows are welcome.
 - **Monorepos with built package outputs.** When packages import each other through built declaration files (`dist/*.d.ts`), references from consuming packages resolve to the declaration files, not the source, so find-references on a source symbol will not list them. Any TypeScript server behaves this way. Claude Code additionally drops results in gitignored paths.
-- **Linux file watching for files Claude has not opened.** Files Claude has opened are kept in sync with disk on every platform (see above). Other files are the server's own business: the native server watches them only on macOS and Windows, so on Linux a file TypeScript 7 loaded as a dependency and that later changed outside Claude Code is not picked up until Claude opens it. tsrs does not watch them on Windows either yet.
+- **Linux file watching for files Claude has not opened.** Files Claude has opened are kept in sync with disk on every platform. Other files are the server's own business: the native server watches them only on macOS and Windows, so on Linux a file TypeScript 7 loaded as a dependency and that later changed outside Claude Code is not picked up until Claude opens it. tsrs does not watch them on Windows either yet.
 
 ## Development
 
 This plugin was built for and with the help of Claude Code and is maintained by rubberduck studio. Every change is reviewed by a human before it is merged. Behaviour was verified in real Claude Code sessions on macOS, through CI on Linux, macOS and Windows, and in git worktree sessions; see Limitations for what is known not to work.
 
+See [CONTRIBUTING.md](CONTRIBUTING.md) to work on it and [CHANGELOG.md](CHANGELOG.md) for what changed.
+
 ## More Information
 - [TypeScript 7 (native compiler)](https://github.com/microsoft/TypeScript/tree/main/tsc)
 - [typescript-language-server on npm](https://www.npmjs.com/package/typescript-language-server)
 - [Claude Code LSP plugins](https://code.claude.com/docs/en/plugins-reference)
+
+## License
+
+[MIT](LICENSE)
